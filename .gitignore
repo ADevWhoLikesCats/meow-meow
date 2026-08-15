@@ -1,0 +1,64 @@
+# --- Compiled binaries ---
+*.exe
+*.dll
+*.so
+*.dylib
+*.o
+*.obj
+*.a
+*.lib
+
+# --- LLVM large files (use releases instead) ---
+libLLVM-*.dll
+LLVM-*.dll
+*.dll
+
+# --- Build directories ---
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+Makefile
+*.cmake
+
+# --- Compiled output from your compiler ---
+*.o
+*.obj
+*.exe
+output.o
+output.exe
+test.o
+test.exe
+
+# --- Temporary files ---
+*.tmp
+*.log
+*.out
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- IDE / Editor files ---
+.vscode/
+.idea/
+*.user
+*.suo
+*.sln
+*.vcxproj
+*.filters
+
+# --- Debug / Profiling ---
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.map
+
+# --- MSYS2 / Windows specific ---
+mingw32/
+mingw64/
+ucrt64/
+clang64/
+msys2/
