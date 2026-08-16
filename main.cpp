@@ -67,7 +67,11 @@ enum Token {
   tok_unary = -12,
 
   // var definition
-  tok_var = -13
+  tok_var = -13,
+
+  // print definition lol
+
+  tok_print = -14
 };
 
 static std::string IdentifierStr; // Filled in if tok_identifier
@@ -104,8 +108,10 @@ static int gettok() {
       return tok_binary;
     if (IdentifierStr == "unary")
       return tok_unary;
-    if (IdentifierStr == "var")
+    if (IdentifierStr == "var")  
       return tok_var;
+    if (IdentifierStr == "print")
+      return tok_print;  
     return tok_identifier;
   }
 
@@ -344,6 +350,30 @@ static std::unique_ptr<ExprAST> ParseNumberExpr() {
   return std::move(Result);
 }
 
+static std::unique_ptr<ExprAST> ParsePrintExpr() {
+  getNextToken();
+
+  if (CurTok != '(')
+    return LogError("expected '(' after print");
+
+  getNextToken();
+  
+  auto Arg = ParseExpression();
+  if (!Arg)
+    return nullptr;
+
+  
+  if (CurTok != ')')
+    return LogError("expected ') after print argument.");
+
+  getNextToken();
+  
+  std::vector<std::unique_ptr<ExprAST>> Args;
+  Args.push_back(std::move(Arg));
+  return std::make_unique<CallExprAST>("printd", std::move(Args));    
+
+}
+
 /// parenexpr ::= '(' expression ')'
 static std::unique_ptr<ExprAST> ParseParenExpr() {
   getNextToken(); // eat (.
@@ -539,6 +569,9 @@ static std::unique_ptr<ExprAST> ParsePrimary() {
   case tok_for:
     return ParseForExpr();
   case tok_var:
+    return ParseVarExpr();
+  case tok_print:
+    return ParsePrintExpr();  
     return ParseVarExpr();
   }
 }
@@ -1325,12 +1358,27 @@ static void EmitObjectFile(const std::string &Filename, bool LinkToExe = false, 
 
 void LinkToExecutable(const std::string &ObjectFile, const std::string &OutputFile, const std::string &EntryPoint) {
     std::stringstream WrapperStream;
-    WrapperStream << "extern \"C\" double " << EntryPoint << "(double x);\n";
+
+    // --- Include necessary headers and define printd ---
+    WrapperStream << "#include <cstdio>\n";
+    WrapperStream << "#include <cstdlib>\n\n";
+
+    // Define printd directly in the wrapper so the linker can find it
+    WrapperStream << "extern \"C\" double printd(double X) {\n";
+    WrapperStream << "    fprintf(stderr, \"%f\\n\", X);\n";
+    WrapperStream << "    return 0;\n";
+    WrapperStream << "}\n\n";
+
+    // --- Declare the user's entry point ---
+    WrapperStream << "extern \"C\" double " << EntryPoint << "(double x);\n\n";
+
+    // --- The actual main() function ---
     WrapperStream << "int main() {\n";
-    WrapperStream << "    return " << EntryPoint << "(10);\n";
+    WrapperStream << "    double result = " << EntryPoint << "(10);\n";
+    WrapperStream << "    return 0;\n";
     WrapperStream << "}\n";
 
-    // Use the portable w64devkit g++ from the toolchain folder (Windows path with quotes)
+    // --- Use the portable w64devkit g++ from the toolchain folder (Windows path with quotes) ---
     std::string CompilerPath = "\"toolchain\\w64devkit\\bin\\g++.exe\"";
 
     stdfs::path TempDir = stdfs::temp_directory_path() / "meowmeow";
@@ -1341,7 +1389,7 @@ void LinkToExecutable(const std::string &ObjectFile, const std::string &OutputFi
     WrapperFile << WrapperStream.str();
     WrapperFile.close();
 
-    // Compile wrapper to object file
+    // --- Compile wrapper to object file ---
     std::string CompileCmd = CompilerPath + " -c " + WrapperPath.string() + " -o " + TempDir.string() + "\\wrapper.o";
     outs() << "Compiling: " << CompileCmd << "\n";
     int CompileResult = system(CompileCmd.c_str());
@@ -1350,7 +1398,7 @@ void LinkToExecutable(const std::string &ObjectFile, const std::string &OutputFi
         return;
     }
 
-    // Link both object files
+    // --- Link both object files ---
     std::string LinkCmd = CompilerPath + " " + TempDir.string() + "\\wrapper.o " + ObjectFile + " -o " + OutputFile;
     outs() << "Linking: " << LinkCmd << "\n";
     int LinkResult = system(LinkCmd.c_str());
@@ -1360,11 +1408,10 @@ void LinkToExecutable(const std::string &ObjectFile, const std::string &OutputFi
         outs() << "Successfully linked to " << OutputFile << "\n";
     }
 
-    // Clean up
+    // --- Clean up ---
     stdfs::remove(WrapperPath);
     stdfs::remove(TempDir / "wrapper.o");
 }
- 
 int main(int argc, char **argv) {
     // Install standard binary operators
     BinopPrecedence['<'] = 10;
@@ -1396,6 +1443,8 @@ int main(int argc, char **argv) {
     }
 
     // --- Initialize module ---
+    // In main(), before InitializeModuleAndPassManager
+    FunctionProtos["printd"] = std::make_unique<PrototypeAST>("printd", std::vector<std::string>{"x"});
     InitializeModuleAndPassManager();
     getNextToken();
 
