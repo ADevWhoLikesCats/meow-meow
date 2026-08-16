@@ -1,2 +1,2 @@
 def cattoshallmeow(x)
-  return x;
+  print(43);

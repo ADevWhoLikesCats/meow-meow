@@ -1173,68 +1173,85 @@ Value *VarExprAST::codegen() {
 }
 
 Function *PrototypeAST::codegen() {
-  // Make the function type:  double(double,double) etc.
-  std::vector<Type *> Doubles(Args.size(), Type::getDoubleTy(*TheContext));
-  FunctionType *FT =
-      FunctionType::get(Type::getDoubleTy(*TheContext), Doubles, false);
+    fprintf(stderr, "DEBUG: PrototypeAST::codegen() entered for: %s\n", Name.c_str());
+    
+    // Make the function type:  double(double,double) etc.
+    std::vector<Type *> Doubles(Args.size(), Type::getDoubleTy(*TheContext));
+    FunctionType *FT =
+        FunctionType::get(Type::getDoubleTy(*TheContext), Doubles, false);
 
-  Function *F =
-      Function::Create(FT, Function::ExternalLinkage, Name, TheModule.get());
+    Function *F =
+        Function::Create(FT, Function::ExternalLinkage, Name, TheModule.get());
+    
+    fprintf(stderr, "DEBUG: PrototypeAST::codegen() - function created: %s\n", F->getName().str().c_str());
 
-  // Set names for all arguments.
-  unsigned Idx = 0;
-  for (auto &Arg : F->args())
-    Arg.setName(Args[Idx++]);
+    // Set names for all arguments.
+    unsigned Idx = 0;
+    for (auto &Arg : F->args())
+        Arg.setName(Args[Idx++]);
 
-  return F;
+    return F;
 }
 
 Function *FunctionAST::codegen() {
-  // Transfer ownership of the prototype to the FunctionProtos map, but keep a
-  // reference to it for use below.
-  auto &P = *Proto;
-  FunctionProtos[Proto->getName()] = std::move(Proto);
-  Function *TheFunction = getFunction(P.getName());
-  if (!TheFunction)
+    fprintf(stderr, "DEBUG: FunctionAST::codegen() entered\n");
+    
+    // Transfer ownership of the prototype to the FunctionProtos map, but keep a
+    // reference to it for use below.
+    auto &P = *Proto;
+    FunctionProtos[Proto->getName()] = std::move(Proto);
+    
+    fprintf(stderr, "DEBUG: FunctionAST::codegen() - getting function: %s\n", P.getName().c_str());
+    
+    Function *TheFunction = getFunction(P.getName());
+    if (!TheFunction) {
+        fprintf(stderr, "DEBUG: FunctionAST::codegen() - getFunction returned nullptr!\n");
+        return nullptr;
+    }
+    
+    fprintf(stderr, "DEBUG: FunctionAST::codegen() - function found: %s\n", TheFunction->getName().str().c_str());
+
+    // If this is an operator, install it.
+    if (P.isBinaryOp())
+        BinopPrecedence[P.getOperatorName()] = P.getBinaryPrecedence();
+
+    // Create a new basic block to start insertion into.
+    BasicBlock *BB = BasicBlock::Create(*TheContext, "entry", TheFunction);
+    Builder->SetInsertPoint(BB);
+
+    // Record the function arguments in the NamedValues map.
+    NamedValues.clear();
+    for (auto &Arg : TheFunction->args()) {
+        // Create an alloca for this variable.
+        AllocaInst *Alloca = CreateEntryBlockAlloca(TheFunction, Arg.getName());
+
+        // Store the initial value into the alloca.
+        Builder->CreateStore(&Arg, Alloca);
+
+        // Add arguments to variable symbol table.
+        NamedValues[std::string(Arg.getName())] = Alloca;
+    }
+
+    fprintf(stderr, "DEBUG: FunctionAST::codegen() - about to codegen body\n");
+    
+    if (Value *RetVal = Body->codegen()) {
+        fprintf(stderr, "DEBUG: FunctionAST::codegen() - body codegen succeeded\n");
+        // Finish off the function.
+        Builder->CreateRet(RetVal);
+
+        // Validate the generated code, checking for consistency.
+        verifyFunction(*TheFunction);
+
+        return TheFunction;
+    }
+
+    fprintf(stderr, "DEBUG: FunctionAST::codegen() - body codegen FAILED!\n");
+    // Error reading body, remove function.
+    TheFunction->eraseFromParent();
+
+    if (P.isBinaryOp())
+        BinopPrecedence.erase(P.getOperatorName());
     return nullptr;
-
-  // If this is an operator, install it.
-  if (P.isBinaryOp())
-    BinopPrecedence[P.getOperatorName()] = P.getBinaryPrecedence();
-
-  // Create a new basic block to start insertion into.
-  BasicBlock *BB = BasicBlock::Create(*TheContext, "entry", TheFunction);
-  Builder->SetInsertPoint(BB);
-
-  // Record the function arguments in the NamedValues map.
-  NamedValues.clear();
-  for (auto &Arg : TheFunction->args()) {
-    // Create an alloca for this variable.
-    AllocaInst *Alloca = CreateEntryBlockAlloca(TheFunction, Arg.getName());
-
-    // Store the initial value into the alloca.
-    Builder->CreateStore(&Arg, Alloca);
-
-    // Add arguments to variable symbol table.
-    NamedValues[std::string(Arg.getName())] = Alloca;
-  }
-
-  if (Value *RetVal = Body->codegen()) {
-    // Finish off the function.
-    Builder->CreateRet(RetVal);
-
-    // Validate the generated code, checking for consistency.
-    verifyFunction(*TheFunction);
-
-    return TheFunction;
-  }
-
-  // Error reading body, remove function.
-  TheFunction->eraseFromParent();
-
-  if (P.isBinaryOp())
-    BinopPrecedence.erase(P.getOperatorName());
-  return nullptr;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1251,21 +1268,23 @@ static void InitializeModuleAndPassManager() {
 }
 
 static void HandleDefinition() {
-  fprintf(stderr, "DEBUG: Entering HandleDefinition\n");
-  fprintf(stderr, "DEBUG: About to call ParseDefinition()\n");
-  
-  if (auto FnAST = ParseDefinition()) {
-    fprintf(stderr, "DEBUG: ParseDefinition() succeeded!\n");
-    if (auto *FnIR = FnAST->codegen()) {
-      fprintf(stderr, "Read function definition:");
-      FnIR->print(errs());
-      fprintf(stderr, "\n");
+    fprintf(stderr, "DEBUG: Entering HandleDefinition\n");
+    
+    if (auto FnAST = ParseDefinition()) {
+        fprintf(stderr, "DEBUG: HandleDefinition - ParseDefinition() succeeded\n");
+        if (auto *FnIR = FnAST->codegen()) {
+            fprintf(stderr, "DEBUG: HandleDefinition - codegen succeeded!\n");
+            fprintf(stderr, "Read function definition:");
+            FnIR->print(errs());
+            fprintf(stderr, "\n");
+        } else {
+            fprintf(stderr, "DEBUG: HandleDefinition - codegen returned nullptr!\n");
+        }
+    } else {
+        fprintf(stderr, "DEBUG: HandleDefinition - ParseDefinition() returned nullptr!\n");
+        // Skip token for error recovery.
+        getNextToken();
     }
-  } else {
-    fprintf(stderr, "DEBUG: ParseDefinition() returned nullptr!\n");
-    // Skip token for error recovery.
-    getNextToken();
-  }
 }
 
 static void HandleExtern() {
