@@ -30,9 +30,13 @@
 #include <utility>
 #include <vector>
 #include <fstream>
+#include <sstream>
+#include <filesystem>
 
 using namespace llvm;
 using namespace llvm::sys;
+
+namespace stdfs = std::filesystem;
 
 //===----------------------------------------------------------------------===//
 // Lexer
@@ -1202,7 +1206,7 @@ extern "C" DLLEXPORT double printd(double X) {
 //===----------------------------------------------------------------------===//
 
 
-static void EmitObjectFile(const std::string &Filename) {
+static void EmitObjectFile(const std::string &Filename, bool LinkToExe = false, const std::string &ExeFile = "") {
     // --- DIAGNOSTIC: Print all functions in the module ---
     outs() << "Functions in module before emitting object file:\n";
     for (auto &F : *TheModule) {
@@ -1210,18 +1214,16 @@ static void EmitObjectFile(const std::string &Filename) {
     }
     outs() << "---\n";
 
-    // --- Initialize LLVM targets ---
+    // --- Step 1: Emit Object File ---
     InitializeAllTargetInfos();
     InitializeAllTargets();
     InitializeAllTargetMCs();
     InitializeAllAsmParsers();
     InitializeAllAsmPrinters();
 
-    // --- Set target triple ---
     auto TargetTriple = sys::getDefaultTargetTriple();
     TheModule->setTargetTriple(Triple(TargetTriple));
 
-    // --- Look up the target ---
     std::string Error;
     auto Target = TargetRegistry::lookupTarget(TheModule->getTargetTriple(), Error);
     if (!Target) {
@@ -1229,7 +1231,6 @@ static void EmitObjectFile(const std::string &Filename) {
         return;
     }
 
-    // --- Create target machine ---
     auto CPU = "generic";
     auto Features = "";
     TargetOptions opt;
@@ -1241,10 +1242,8 @@ static void EmitObjectFile(const std::string &Filename) {
         return;
     }
 
-    // --- Set data layout ---
     TheModule->setDataLayout(TheTargetMachine->createDataLayout());
 
-    // --- Open output file ---
     std::error_code EC;
     raw_fd_ostream dest(Filename, EC, sys::fs::OF_None);
     if (EC) {
@@ -1252,7 +1251,6 @@ static void EmitObjectFile(const std::string &Filename) {
         return;
     }
 
-    // --- Emit object file ---
     legacy::PassManager pass;
     auto FileType = CodeGenFileType::ObjectFile;
 
@@ -1263,34 +1261,106 @@ static void EmitObjectFile(const std::string &Filename) {
 
     pass.run(*TheModule);
     dest.flush();
-
     outs() << "Wrote " << Filename << "\n";
-}
 
-void LinkToExecutable(const std::string &ObjectFile, const std::string &OutputFile) {
-    // Create a wrapper.cpp file with main
-    std::ofstream Wrapper("wrapper.cpp");
-    Wrapper << "extern \"C\" double fib(double x);\n";
-    Wrapper << "int main() {\n";
-    Wrapper << "    double result = fib(10);\n";
-    Wrapper << "    return 0;\n";
-    Wrapper << "}\n";
-    Wrapper.close();
+    // --- Step 2: If linking to exe, detect entry point and link ---
+    if (LinkToExe && !ExeFile.empty()) {
+        // --- Detect Entry Point ---
+        std::vector<std::string> CommonEntryPoints = {
+            "main", "cattoshallmeow", "__init__", "start", "run", "entry", "go"
+        };
 
-    std::string Command = "clang++ -o " + OutputFile + " wrapper.cpp " + ObjectFile;
-    outs() << "Linking: " << Command << "\n";
+        std::string EntryPoint;
+        for (const auto& name : CommonEntryPoints) {
+            if (TheModule->getFunction(name)) {
+                EntryPoint = name;
+                break;
+            }
+        }
 
-    int Result = system(Command.c_str());
-    if (Result != 0) {
-        errs() << "Error: Linking failed with code " << Result << "\n";
-    } else {
-        outs() << "Successfully linked to " << OutputFile << "\n";
+        if (EntryPoint.empty()) {
+            std::vector<std::string> UserFunctions;
+            for (auto &F : *TheModule) {
+                if (!F.isDeclaration() && F.getName() != "__anon_expr") {
+                    UserFunctions.push_back(F.getName().str());
+                }
+            }
+            if (UserFunctions.size() == 1) {
+                EntryPoint = UserFunctions[0];
+            } else if (!UserFunctions.empty()) {
+                EntryPoint = UserFunctions.back();
+            } else {
+                EntryPoint = "__anon_expr";
+            }
+        }
+
+        outs() << "Detected entry point: " << EntryPoint << "\n";
+
+        // --- Step 3: Generate Wrapper in Memory ---
+        std::stringstream WrapperStream;
+        WrapperStream << "extern \"C\" double " << EntryPoint << "(double x);\n";
+        WrapperStream << "int main() {\n";
+        WrapperStream << "    double result = " << EntryPoint << "(10);\n";
+        WrapperStream << "    return 0;\n";
+        WrapperStream << "}\n";
+
+        // --- Step 4: Pipe to clang++ via stdin ---
+        std::string Command = "clang++ -x c++ - -o " + ExeFile + " " + Filename;
+        outs() << "Linking: " << Command << "\n";
+
+        FILE* pipe = popen(Command.c_str(), "w");
+        if (pipe) {
+            fwrite(WrapperStream.str().c_str(), 1, WrapperStream.str().size(), pipe);
+            int status = pclose(pipe);
+            if (status != 0) {
+                errs() << "Error: Linking failed with code " << status << "\n";
+            } else {
+                outs() << "Successfully linked to " << ExeFile << "\n";
+            }
+        } else {
+            errs() << "Error: Could not open pipe to clang++\n";
+        }
     }
 }
 
+void LinkToExecutable(const std::string &ObjectFile, const std::string &OutputFile, const std::string &EntryPoint) {
+    std::stringstream WrapperStream;
+    WrapperStream << "extern \"C\" double " << EntryPoint << "(double x);\n";
+    WrapperStream << "int main() {\n";
+    WrapperStream << "    return " << EntryPoint << "(10);\n";
+    WrapperStream << "}\n";
 
+    // Use stdfs instead of fs to avoid conflict with llvm::sys::fs
+    stdfs::path TempDir = stdfs::temp_directory_path() / "meowmeow";
+    stdfs::create_directories(TempDir);
+    stdfs::path WrapperPath = TempDir / "wrapper.cpp";
 
+    std::ofstream WrapperFile(WrapperPath.string());
+    WrapperFile << WrapperStream.str();
+    WrapperFile.close();
+
+    std::string CompileCmd = "clang++ -c " + WrapperPath.string() + " -o " + TempDir.string() + "/wrapper.o";
+    int CompileResult = system(CompileCmd.c_str());
+    if (CompileResult != 0) {
+        errs() << "Error: Failed to compile wrapper\n";
+        return;
+    }
+
+    std::string LinkCmd = "clang++ " + TempDir.string() + "/wrapper.o " + ObjectFile + " -o " + OutputFile;
+    outs() << "Linking: " << LinkCmd << "\n";
+    int LinkResult = system(LinkCmd.c_str());
+    if (LinkResult != 0) {
+        errs() << "Error: Linking failed with code " << LinkResult << "\n";
+    } else {
+        outs() << "Successfully linked to " << OutputFile << "\n";
+    }
+
+    stdfs::remove(WrapperPath);
+    stdfs::remove(TempDir / "wrapper.o");
+}
+ 
 int main(int argc, char **argv) {
+    // Install standard binary operators
     BinopPrecedence['<'] = 10;
     BinopPrecedence['+'] = 20;
     BinopPrecedence['-'] = 20;
@@ -1300,6 +1370,7 @@ int main(int argc, char **argv) {
     std::string OutputFile = "output.o";
     bool LinkToExe = false;
 
+    // --- Parse command-line arguments ---
     for (int i = 1; i < argc; ++i) {
         std::string Arg = argv[i];
         if (Arg == "-o" && i + 1 < argc) {
@@ -1318,10 +1389,12 @@ int main(int argc, char **argv) {
         }
     }
 
+    // --- Initialize module ---
     InitializeModuleAndPassManager();
     getNextToken();
 
     if (FileMode) {
+        // --- Parse the entire file ---
         while (CurTok != tok_eof) {
             switch (CurTok) {
             case ';': getNextToken(); break;
@@ -1331,21 +1404,50 @@ int main(int argc, char **argv) {
             }
         }
 
-        // If output is .exe, first generate a temporary .o file
+        // --- Determine object file name ---
         std::string ObjectFile = OutputFile;
         if (LinkToExe) {
-            // Replace .exe with .o for the object file
             ObjectFile = OutputFile.substr(0, OutputFile.size() - 4) + ".o";
         }
 
+        // --- Emit object file ---
         EmitObjectFile(ObjectFile);
 
+        // --- If linking to exe, detect entry point and link ---
         if (LinkToExe) {
-            // Link to executable
-            std::string ExeFile = OutputFile;
-            LinkToExecutable(ObjectFile, ExeFile);
+            // --- Detect Entry Point from the module ---
+            std::string EntryPoint;
+            std::vector<std::string> CommonEntryPoints = {
+                "main", "cattoshallmeow", "__init__", "start", "run", "entry", "go"
+            };
+
+            for (const auto& name : CommonEntryPoints) {
+                if (TheModule->getFunction(name)) {
+                    EntryPoint = name;
+                    break;
+                }
+            }
+
+            if (EntryPoint.empty()) {
+                for (auto &F : *TheModule) {
+                    if (!F.isDeclaration() && F.getName() != "__anon_expr") {
+                        EntryPoint = F.getName().str();
+                        break;
+                    }
+                }
+            }
+
+            if (EntryPoint.empty()) {
+                EntryPoint = "__anon_expr";
+            }
+
+            outs() << "Detected entry point: " << EntryPoint << "\n";
+
+            // --- Link with the detected entry point ---
+            LinkToExecutable(ObjectFile, OutputFile, EntryPoint);
         }
     } else {
+        // --- REPL mode ---
         MainLoop();
     }
 

@@ -1,7 +1,7 @@
-def fib(x)
+def cattoshallmeow(x)
   if x < 3 then
     1
   else
-    fib(x-1) + fib(x-2);
+    cattoshallmeow(x-1) + cattoshallmeow(x-2);
 
-fib(10);
+cattoshallmeow(10);
