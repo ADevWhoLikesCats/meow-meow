@@ -69,23 +69,30 @@ enum Token {
   // var definition
   tok_var = -13,
 
-  // print definition lol
+  // print definition
+  tok_print = -14,
 
-  tok_print = -14
+  // string definition
+  tok_string = -15,
+
+  // input definition
+  tok_input = -16
 };
-
 static std::string IdentifierStr; // Filled in if tok_identifier
-static double NumVal;             // Filled in if tok_number
+static double NumVal;
+static std::string StringVal;             // Filled in if tok_number
 
 /// gettok - Return the next token from standard input.
 static int gettok() {
+  fprintf(stderr, "DEBUG: gettok() called\n");  
   static int LastChar = ' ';
 
   // Skip any whitespace.
   while (isspace(LastChar))
     LastChar = getchar();
 
-  if (isalpha(LastChar)) { // identifier: [a-zA-Z][a-zA-Z0-9]*
+  // --- IDENTIFIERS AND KEYWORDS ---
+  if (isalpha(LastChar)) {
     IdentifierStr = LastChar;
     while (isalnum((LastChar = getchar())))
       IdentifierStr += LastChar;
@@ -108,44 +115,59 @@ static int gettok() {
       return tok_binary;
     if (IdentifierStr == "unary")
       return tok_unary;
-    if (IdentifierStr == "var")  
+    if (IdentifierStr == "var")
       return tok_var;
     if (IdentifierStr == "print")
-      return tok_print;  
+      return tok_print;
+    if (IdentifierStr == "input")
+      return tok_input;
     return tok_identifier;
+    if (IdentifierStr == "def") {
+    fprintf(stderr, "DEBUG: Found 'def' keyword!\n");
+    return tok_def;
+  }
   }
 
-  if (isdigit(LastChar) || LastChar == '.') { // Number: [0-9.]+
+  // --- NUMBERS ---
+  if (isdigit(LastChar) || LastChar == '.') {
     std::string NumStr;
     do {
       NumStr += LastChar;
       LastChar = getchar();
     } while (isdigit(LastChar) || LastChar == '.');
-
     NumVal = strtod(NumStr.c_str(), nullptr);
     return tok_number;
   }
 
+  // --- STRING LITERALS ---
+  if (LastChar == '"') {
+    StringVal = "";
+    while ((LastChar = getchar()) != '"' && LastChar != EOF)
+      StringVal += LastChar;
+    if (LastChar == EOF)
+      return tok_eof;
+    LastChar = getchar(); // eat closing "
+    return tok_string;
+  }
+
+  // --- COMMENTS ---
   if (LastChar == '#') {
-    // Comment until end of line.
     do
       LastChar = getchar();
     while (LastChar != EOF && LastChar != '\n' && LastChar != '\r');
-
     if (LastChar != EOF)
       return gettok();
   }
 
-  // Check for end of file.  Don't eat the EOF.
+  // --- END OF FILE ---
   if (LastChar == EOF)
     return tok_eof;
 
-  // Otherwise, just return the character as its ascii value.
+  // --- OTHER CHARACTERS (operators, punctuation, etc.) ---
   int ThisChar = LastChar;
   LastChar = getchar();
   return ThisChar;
 }
-
 //===----------------------------------------------------------------------===//
 // Abstract Syntax Tree (aka Parse Tree)
 //===----------------------------------------------------------------------===//
@@ -166,6 +188,16 @@ class NumberExprAST : public ExprAST {
 
 public:
   NumberExprAST(double Val) : Val(Val) {}
+
+  Value *codegen() override;
+};
+
+/// StringExprAST - Expression class for string literals like "hello".
+class StringExprAST : public ExprAST {
+  std::string Val;
+
+public:
+  StringExprAST(const std::string &Val) : Val(Val) {}
 
   Value *codegen() override;
 };
@@ -304,6 +336,7 @@ public:
 
 } // end anonymous namespace
 
+
 //===----------------------------------------------------------------------===//
 // Parser
 //===----------------------------------------------------------------------===//
@@ -313,6 +346,10 @@ public:
 /// lexer and updates CurTok with its results.
 static int CurTok;
 static int getNextToken() { return CurTok = gettok(); }
+
+// Forward declarations
+static std::unique_ptr<ExprAST> ParseExpression();
+static std::unique_ptr<FunctionAST> ParseTopLevelExpr();  
 
 /// BinopPrecedence - This holds the precedence for each binary operator that is
 /// defined.
@@ -350,28 +387,65 @@ static std::unique_ptr<ExprAST> ParseNumberExpr() {
   return std::move(Result);
 }
 
+/// stringexpr ::= "string"
+static std::unique_ptr<ExprAST> ParseStringExpr() {
+  auto Result = std::make_unique<StringExprAST>(StringVal);
+  getNextToken(); // consume the string
+  return std::move(Result);
+}
+
 static std::unique_ptr<ExprAST> ParsePrintExpr() {
-  getNextToken();
+  getNextToken(); // eat 'print'
 
   if (CurTok != '(')
     return LogError("expected '(' after print");
 
-  getNextToken();
-  
+  getNextToken(); // eat '('
+
+  // --- Check if it's a string ---
+  if (CurTok == tok_string) {
+    std::string Str = StringVal;
+    getNextToken(); // eat the string
+    if (CurTok != ')')
+      return LogError("expected ')' after print argument");
+    getNextToken(); // eat ')'
+
+    std::vector<std::unique_ptr<ExprAST>> Args;
+    auto StrExpr = std::make_unique<StringExprAST>(Str);
+    Args.push_back(std::move(StrExpr));
+    return std::make_unique<CallExprAST>("printstr", std::move(Args));
+  }
+
+  // --- Number printing (existing code) ---
   auto Arg = ParseExpression();
   if (!Arg)
     return nullptr;
 
-  
   if (CurTok != ')')
-    return LogError("expected ') after print argument.");
+    return LogError("expected ')' after print argument");
 
-  getNextToken();
-  
+  getNextToken(); // eat ')'
+
   std::vector<std::unique_ptr<ExprAST>> Args;
   Args.push_back(std::move(Arg));
-  return std::make_unique<CallExprAST>("printd", std::move(Args));    
+  return std::make_unique<CallExprAST>("printd", std::move(Args));
+}
 
+/// inputexpr ::= 'input' '(' ')'
+static std::unique_ptr<ExprAST> ParseInputExpr() {
+  getNextToken(); // eat 'input'
+
+  if (CurTok != '(')
+    return LogError("expected '(' after input");
+
+  getNextToken(); // eat '('
+
+  if (CurTok != ')')
+    return LogError("expected ')' after input");
+
+  getNextToken(); // eat ')'
+
+  return std::make_unique<CallExprAST>("inputd", std::vector<std::unique_ptr<ExprAST>>());
 }
 
 /// parenexpr ::= '(' expression ')'
@@ -570,8 +644,10 @@ static std::unique_ptr<ExprAST> ParsePrimary() {
     return ParseForExpr();
   case tok_var:
     return ParseVarExpr();
-  case tok_print:
-    return ParsePrintExpr();  
+  case tok_print:  
+    return ParsePrintExpr();
+  case tok_input:
+    return ParseInputExpr();    
     return ParseVarExpr();
   }
 }
@@ -708,24 +784,39 @@ static std::unique_ptr<PrototypeAST> ParsePrototype() {
 
 /// definition ::= 'def' prototype expression
 static std::unique_ptr<FunctionAST> ParseDefinition() {
+  fprintf(stderr, "DEBUG: ParseDefinition() entered\n");
+  
   getNextToken(); // eat def.
-  auto Proto = ParsePrototype();
-  if (!Proto)
-    return nullptr;
 
-  if (auto E = ParseExpression())
+  fprintf(stderr, "DEBUG: ParseDefinition() - parsing prototype...\n");
+  auto Proto = ParsePrototype();
+  if (!Proto) {
+    fprintf(stderr, "DEBUG: ParseDefinition() - ParsePrototype() FAILED!\n");
+    return nullptr;
+  }
+  fprintf(stderr, "DEBUG: ParseDefinition() - prototype parsed: %s\n", Proto->getName().c_str());
+
+  fprintf(stderr, "DEBUG: ParseDefinition() - parsing expression...\n");
+  if (auto E = ParseExpression()) {
+    fprintf(stderr, "DEBUG: ParseDefinition() - expression parsed successfully\n");
     return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
+  }
+  
+  fprintf(stderr, "DEBUG: ParseDefinition() - ParseExpression() FAILED!\n");
   return nullptr;
 }
 
 /// toplevelexpr ::= expression
 static std::unique_ptr<FunctionAST> ParseTopLevelExpr() {
+  fprintf(stderr, "DEBUG: ParseTopLevelExpr() entered\n");
   if (auto E = ParseExpression()) {
     // Make an anonymous proto.
     auto Proto = std::make_unique<PrototypeAST>("__anon_expr",
                                                  std::vector<std::string>());
+    fprintf(stderr, "DEBUG: ParseTopLevelExpr() - expression parsed successfully\n");
     return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
   }
+  fprintf(stderr, "DEBUG: ParseTopLevelExpr() - expression parsing failed\n");
   return nullptr;
 }
 
@@ -788,6 +879,12 @@ Value *VariableExprAST::codegen() {
   // Load the value.
   return Builder->CreateLoad(Type::getDoubleTy(*TheContext), V, Name.c_str());
 }
+
+// --- StringExprAST codegen DEFINITION ---
+Value *StringExprAST::codegen() {
+  return Builder->CreateGlobalString(Val);  // Use CreateGlobalString, not CreateGlobalStringPtr
+}
+
 
 Value *UnaryExprAST::codegen() {
   Value *OperandV = Operand->codegen();
@@ -1154,13 +1251,18 @@ static void InitializeModuleAndPassManager() {
 }
 
 static void HandleDefinition() {
+  fprintf(stderr, "DEBUG: Entering HandleDefinition\n");
+  fprintf(stderr, "DEBUG: About to call ParseDefinition()\n");
+  
   if (auto FnAST = ParseDefinition()) {
+    fprintf(stderr, "DEBUG: ParseDefinition() succeeded!\n");
     if (auto *FnIR = FnAST->codegen()) {
       fprintf(stderr, "Read function definition:");
       FnIR->print(errs());
       fprintf(stderr, "\n");
     }
   } else {
+    fprintf(stderr, "DEBUG: ParseDefinition() returned nullptr!\n");
     // Skip token for error recovery.
     getNextToken();
   }
@@ -1200,6 +1302,7 @@ static void MainLoop() {
       getNextToken();
       break;
     case tok_def:
+      fprintf(stderr, "DEBUG: tok_def found in MainLoop\n");
       HandleDefinition();
       break;
     case tok_extern:
@@ -1232,6 +1335,19 @@ extern "C" DLLEXPORT double putchard(double X) {
 extern "C" DLLEXPORT double printd(double X) {
   fprintf(stderr, "%f\n", X);
   return 0;
+}
+
+/// printstr - prints a string literal
+extern "C" DLLEXPORT double printstr(const char* Str) {
+  fprintf(stderr, "%s", Str);
+  return 0;
+}
+
+/// inputd - reads a double from stdin
+extern "C" DLLEXPORT double inputd() {
+  double X;
+  scanf("%lf", &X);
+  return X;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1423,41 +1539,64 @@ int main(int argc, char **argv) {
     std::string OutputFile = "output.o";
     bool LinkToExe = false;
 
+    fprintf(stderr, "DEBUG: main() started\n");  // <-- ADDED
+
     // --- Parse command-line arguments ---
     for (int i = 1; i < argc; ++i) {
         std::string Arg = argv[i];
+        fprintf(stderr, "DEBUG: Arg[%d] = %s\n", i, Arg.c_str());  // <-- ADDED
+
         if (Arg == "-o" && i + 1 < argc) {
             OutputFile = argv[++i];
-            // Check if output file ends with .exe
+            fprintf(stderr, "DEBUG: Output file = %s\n", OutputFile.c_str());  // <-- ADDED
             if (OutputFile.size() >= 4 &&
                 OutputFile.substr(OutputFile.size() - 4) == ".exe") {
                 LinkToExe = true;
+                fprintf(stderr, "DEBUG: Linking to EXE\n");  // <-- ADDED
             }
         } else if (!FileMode && Arg[0] != '-') {
+            fprintf(stderr, "DEBUG: Opening file: %s\n", Arg.c_str());  // <-- ADDED
             if (freopen(Arg.c_str(), "r", stdin) == nullptr) {
                 fprintf(stderr, "Could not open file: %s\n", Arg.c_str());
                 return 1;
             }
+            fprintf(stderr, "DEBUG: File opened successfully\n");  // <-- ADDED
             FileMode = true;
         }
     }
 
     // --- Initialize module ---
-    // In main(), before InitializeModuleAndPassManager
     FunctionProtos["printd"] = std::make_unique<PrototypeAST>("printd", std::vector<std::string>{"x"});
     InitializeModuleAndPassManager();
     getNextToken();
 
     if (FileMode) {
+        fprintf(stderr, "DEBUG: Entering file mode\n");  // <-- ADDED
+
         // --- Parse the entire file ---
         while (CurTok != tok_eof) {
+            fprintf(stderr, "DEBUG: CurTok = %d\n", CurTok);  // <-- ADDED
             switch (CurTok) {
-            case ';': getNextToken(); break;
-            case tok_def: HandleDefinition(); break;
-            case tok_extern: HandleExtern(); break;
-            default: HandleTopLevelExpression(); break;
+            case ';':
+                fprintf(stderr, "DEBUG: Found ';'\n");  // <-- ADDED
+                getNextToken();
+                break;
+            case tok_def:
+                fprintf(stderr, "DEBUG: Found tok_def (%d)\n", tok_def);  // <-- ADDED
+                HandleDefinition();
+                break;
+            case tok_extern:
+                fprintf(stderr, "DEBUG: Found tok_extern\n");  // <-- ADDED
+                HandleExtern();
+                break;
+            default:
+                fprintf(stderr, "DEBUG: Unknown token, calling HandleTopLevelExpression\n");  // <-- ADDED
+                HandleTopLevelExpression();
+                break;
             }
         }
+
+        fprintf(stderr, "DEBUG: Reached EOF, parsing complete\n");  // <-- ADDED
 
         // --- Determine object file name ---
         std::string ObjectFile = OutputFile;
@@ -1502,9 +1641,11 @@ int main(int argc, char **argv) {
             LinkToExecutable(ObjectFile, OutputFile, EntryPoint);
         }
     } else {
+        fprintf(stderr, "DEBUG: Entering REPL mode\n");  // <-- ADDED
         // --- REPL mode ---
         MainLoop();
     }
 
+    fprintf(stderr, "DEBUG: main() finished\n");  // <-- ADDED
     return 0;
 }
