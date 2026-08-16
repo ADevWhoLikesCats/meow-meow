@@ -1330,7 +1330,9 @@ void LinkToExecutable(const std::string &ObjectFile, const std::string &OutputFi
     WrapperStream << "    return " << EntryPoint << "(10);\n";
     WrapperStream << "}\n";
 
-    // Use stdfs instead of fs to avoid conflict with llvm::sys::fs
+    // Use the portable w64devkit g++ from the toolchain folder (Windows path with quotes)
+    std::string CompilerPath = "\"toolchain\\w64devkit\\bin\\g++.exe\"";
+
     stdfs::path TempDir = stdfs::temp_directory_path() / "meowmeow";
     stdfs::create_directories(TempDir);
     stdfs::path WrapperPath = TempDir / "wrapper.cpp";
@@ -1339,14 +1341,17 @@ void LinkToExecutable(const std::string &ObjectFile, const std::string &OutputFi
     WrapperFile << WrapperStream.str();
     WrapperFile.close();
 
-    std::string CompileCmd = "clang++ -c " + WrapperPath.string() + " -o " + TempDir.string() + "/wrapper.o";
+    // Compile wrapper to object file
+    std::string CompileCmd = CompilerPath + " -c " + WrapperPath.string() + " -o " + TempDir.string() + "\\wrapper.o";
+    outs() << "Compiling: " << CompileCmd << "\n";
     int CompileResult = system(CompileCmd.c_str());
     if (CompileResult != 0) {
         errs() << "Error: Failed to compile wrapper\n";
         return;
     }
 
-    std::string LinkCmd = "clang++ " + TempDir.string() + "/wrapper.o " + ObjectFile + " -o " + OutputFile;
+    // Link both object files
+    std::string LinkCmd = CompilerPath + " " + TempDir.string() + "\\wrapper.o " + ObjectFile + " -o " + OutputFile;
     outs() << "Linking: " << LinkCmd << "\n";
     int LinkResult = system(LinkCmd.c_str());
     if (LinkResult != 0) {
@@ -1355,6 +1360,7 @@ void LinkToExecutable(const std::string &ObjectFile, const std::string &OutputFi
         outs() << "Successfully linked to " << OutputFile << "\n";
     }
 
+    // Clean up
     stdfs::remove(WrapperPath);
     stdfs::remove(TempDir / "wrapper.o");
 }
