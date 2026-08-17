@@ -349,7 +349,8 @@ static int getNextToken() { return CurTok = gettok(); }
 
 // Forward declarations
 static std::unique_ptr<ExprAST> ParseExpression();
-static std::unique_ptr<FunctionAST> ParseTopLevelExpr();  
+/// toplevelexpr ::= expression
+
 
 /// BinopPrecedence - This holds the precedence for each binary operator that is
 /// defined.
@@ -716,108 +717,99 @@ static std::unique_ptr<ExprAST> ParseExpression() {
   return ParseBinOpRHS(0, std::move(LHS));
 }
 
-/// prototype
-///   ::= id '(' id* ')'
-///   ::= binary LETTER number? (id, id)
-///   ::= unary LETTER (id)
 static std::unique_ptr<PrototypeAST> ParsePrototype() {
-  std::string FnName;
+    std::string FnName;
+    unsigned Kind = 0; // 0 = identifier, 1 = unary, 2 = binary
+    unsigned BinaryPrecedence = 30;
 
-  unsigned Kind = 0; // 0 = identifier, 1 = unary, 2 = binary.
-  unsigned BinaryPrecedence = 30;
+    switch (CurTok) {
+    default:
+        return LogErrorP("Expected function name in prototype");
+    case tok_identifier:
+        FnName = IdentifierStr;
+        Kind = 0;
+        getNextToken();
+        break;
+    case tok_unary:
+        getNextToken();
+        if (!isascii(CurTok))
+            return LogErrorP("Expected unary operator");
+        FnName = "unary";
+        FnName += (char)CurTok;
+        Kind = 1;
+        getNextToken();
+        break;
+    case tok_binary:
+        getNextToken();
+        if (!isascii(CurTok))
+            return LogErrorP("Expected binary operator");
+        FnName = "binary";
+        FnName += (char)CurTok;
+        Kind = 2;
+        getNextToken();
 
-  switch (CurTok) {
-  default:
-    return LogErrorP("Expected function name in prototype");
-  case tok_identifier:
-    FnName = IdentifierStr;
-    Kind = 0;
-    getNextToken();
-    break;
-  case tok_unary:
-    getNextToken();
-    if (!isascii(CurTok))
-      return LogErrorP("Expected unary operator");
-    FnName = "unary";
-    FnName += (char)CurTok;
-    Kind = 1;
-    getNextToken();
-    break;
-  case tok_binary:
-    getNextToken();
-    if (!isascii(CurTok))
-      return LogErrorP("Expected binary operator");
-    FnName = "binary";
-    FnName += (char)CurTok;
-    Kind = 2;
-    getNextToken();
-
-    // Read the precedence if present.
-    if (CurTok == tok_number) {
-      if (NumVal < 1 || NumVal > 100)
-        return LogErrorP("Invalid precedence: must be 1..100");
-      BinaryPrecedence = (unsigned)NumVal;
-      getNextToken();
+        if (CurTok == tok_number) {
+            if (NumVal < 1 || NumVal > 100)
+                return LogErrorP("Invalid precedence: must be 1..100");
+            BinaryPrecedence = (unsigned)NumVal;
+            getNextToken();
+        }
+        break;
     }
-    break;
-  }
 
-  if (CurTok != '(')
-    return LogErrorP("Expected '(' in prototype");
+    if (CurTok != '(')
+        return LogErrorP("Expected '(' in prototype");
 
-  std::vector<std::string> ArgNames;
-  while (getNextToken() == tok_identifier)
-    ArgNames.push_back(IdentifierStr);
-  if (CurTok != ')')
-    return LogErrorP("Expected ')' in prototype");
+    std::vector<std::string> ArgNames;
+    while (getNextToken() == tok_identifier)
+        ArgNames.push_back(IdentifierStr);
+    if (CurTok != ')')
+        return LogErrorP("Expected ')' in prototype");
 
-  // success.
-  getNextToken(); // eat ')'.
+    getNextToken(); // eat ')'.
 
-  // Verify right number of names for operator.
-  if (Kind && ArgNames.size() != Kind)
-    return LogErrorP("Invalid number of operands for operator");
+    if (Kind && ArgNames.size() != Kind)
+        return LogErrorP("Invalid number of operands for operator");
 
-  return std::make_unique<PrototypeAST>(FnName, ArgNames, Kind != 0,
-                                         BinaryPrecedence);
+    fprintf(stderr, "DEBUG: ParsePrototype() - success: %s with %zu args\n", FnName.c_str(), ArgNames.size());
+    return std::make_unique<PrototypeAST>(FnName, ArgNames, Kind != 0, BinaryPrecedence);
 }
 
 /// definition ::= 'def' prototype expression
 static std::unique_ptr<FunctionAST> ParseDefinition() {
-  fprintf(stderr, "DEBUG: ParseDefinition() entered\n");
-  
-  getNextToken(); // eat def.
+    fprintf(stderr, "DEBUG: ParseDefinition() entered\n");
+    
+    getNextToken(); // eat def.
 
-  fprintf(stderr, "DEBUG: ParseDefinition() - parsing prototype...\n");
-  auto Proto = ParsePrototype();
-  if (!Proto) {
-    fprintf(stderr, "DEBUG: ParseDefinition() - ParsePrototype() FAILED!\n");
+    fprintf(stderr, "DEBUG: ParseDefinition() - parsing prototype...\n");
+    auto Proto = ParsePrototype();
+    if (!Proto) {
+        fprintf(stderr, "DEBUG: ParseDefinition() - ParsePrototype() FAILED!\n");
+        return nullptr;
+    }
+    fprintf(stderr, "DEBUG: ParseDefinition() - prototype parsed: %s\n", Proto->getName().c_str());
+
+    fprintf(stderr, "DEBUG: ParseDefinition() - parsing expression...\n");
+    if (auto E = ParseExpression()) {
+        fprintf(stderr, "DEBUG: ParseDefinition() - expression parsed successfully\n");
+        return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
+    }
+    
+    fprintf(stderr, "DEBUG: ParseDefinition() - ParseExpression() FAILED!\n");
     return nullptr;
-  }
-  fprintf(stderr, "DEBUG: ParseDefinition() - prototype parsed: %s\n", Proto->getName().c_str());
-
-  fprintf(stderr, "DEBUG: ParseDefinition() - parsing expression...\n");
-  if (auto E = ParseExpression()) {
-    fprintf(stderr, "DEBUG: ParseDefinition() - expression parsed successfully\n");
-    return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
-  }
-  
-  fprintf(stderr, "DEBUG: ParseDefinition() - ParseExpression() FAILED!\n");
-  return nullptr;
 }
 
-/// toplevelexpr ::= expression
+//// toplevelexpr ::= expression
 static std::unique_ptr<FunctionAST> ParseTopLevelExpr() {
-  fprintf(stderr, "DEBUG: ParseTopLevelExpr() entered\n");
-  if (auto E = ParseExpression()) {
-    // Make an anonymous proto.
-    auto Proto = std::make_unique<PrototypeAST>("__anon_expr",
-                                                 std::vector<std::string>());
-    fprintf(stderr, "DEBUG: ParseTopLevelExpr() - expression parsed successfully\n");
-    return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
-  }
-  fprintf(stderr, "DEBUG: ParseTopLevelExpr() - expression parsing failed\n");
-  return nullptr;
+    fprintf(stderr, "DEBUG: ParseTopLevelExpr() entered\n");
+    if (auto E = ParseExpression()) {
+        auto Proto = std::make_unique<PrototypeAST>("__anon_expr",
+                                                     std::vector<std::string>());
+        fprintf(stderr, "DEBUG: ParseTopLevelExpr() - expression parsed successfully\n");
+        return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
+    }
+    fprintf(stderr, "DEBUG: ParseTopLevelExpr() - expression parsing failed\n");
+    return nullptr;
 }
 
 /// external ::= 'extern' prototype
@@ -1282,7 +1274,6 @@ static void HandleDefinition() {
         }
     } else {
         fprintf(stderr, "DEBUG: HandleDefinition - ParseDefinition() returned nullptr!\n");
-        // Skip token for error recovery.
         getNextToken();
     }
 }
@@ -1362,17 +1353,26 @@ extern "C" DLLEXPORT double printstr(const char* Str) {
   return 0;
 }
 
-/// inputd - reads a double from stdin
+/// inputd - reads a double from stdin, waiting until valid input is entered
 extern "C" DLLEXPORT double inputd() {
-  double X;
-  scanf("%lf", &X);
-  return X;
+    double X;
+    int result;
+    do {
+        result = scanf("%lf", &X);
+        if (result != 1) {
+            // Clear the input buffer
+            int c;
+            while ((c = getchar()) != '\n' && c != EOF) {}
+            fprintf(stderr, "Invalid input. Please enter a number: ");
+        }
+    } while (result != 1);
+    return X;
 }
+
 
 //===----------------------------------------------------------------------===//
 // Main driver code.
 //===----------------------------------------------------------------------===//
-
 
 static void EmitObjectFile(const std::string &Filename, bool LinkToExe = false, const std::string &ExeFile = "") {
     // --- DIAGNOSTIC: Print all functions in the module ---
@@ -1433,120 +1433,114 @@ static void EmitObjectFile(const std::string &Filename, bool LinkToExe = false, 
 
     // --- Step 2: If linking to exe, detect entry point and link ---
     if (LinkToExe && !ExeFile.empty()) {
-        // --- Detect Entry Point ---
-        std::vector<std::string> CommonEntryPoints = {
-            "main", "cattoshallmeow", "__init__", "start", "run", "entry", "go"
-        };
-
+        // --- Auto-detect entry point without hardcoding ---
         std::string EntryPoint;
-        for (const auto& name : CommonEntryPoints) {
-            if (TheModule->getFunction(name)) {
-                EntryPoint = name;
-                break;
+
+        // Collect all user-defined functions (excluding declarations and __anon_expr)
+        std::vector<std::string> UserFunctions;
+        for (auto &F : *TheModule) {
+            std::string Name = F.getName().str();
+            if (!F.isDeclaration() && Name != "__anon_expr") {
+                UserFunctions.push_back(Name);
             }
         }
 
-        if (EntryPoint.empty()) {
-            std::vector<std::string> UserFunctions;
-            for (auto &F : *TheModule) {
-                if (!F.isDeclaration() && F.getName() != "__anon_expr") {
-                    UserFunctions.push_back(F.getName().str());
-                }
-            }
-            if (UserFunctions.size() == 1) {
-                EntryPoint = UserFunctions[0];
-            } else if (!UserFunctions.empty()) {
-                EntryPoint = UserFunctions.back();
+        // Auto-detect based on number of functions
+        if (UserFunctions.size() == 1) {
+            EntryPoint = UserFunctions[0];
+            outs() << "Auto-detected entry point: " << EntryPoint << "\n";
+        } else if (UserFunctions.size() > 1) {
+            // Prefer "main" if it exists (convention)
+            if (TheModule->getFunction("main")) {
+                EntryPoint = "main";
+                outs() << "Using 'main' as entry point (convention)\n";
             } else {
-                EntryPoint = "__anon_expr";
+                EntryPoint = UserFunctions[0];
+                outs() << "Warning: Multiple functions found. Using first: " << EntryPoint << "\n";
             }
+        } else {
+            EntryPoint = "__anon_expr";
+            outs() << "No functions found. Using __anon_expr (this will fail)\n";
         }
 
         outs() << "Detected entry point: " << EntryPoint << "\n";
 
         // --- Step 3: Generate Wrapper in Memory ---
         std::stringstream WrapperStream;
-        WrapperStream << "extern \"C\" double " << EntryPoint << "(double x);\n";
+        WrapperStream << "#include <cstdio>\n";
+        WrapperStream << "#include <cstdlib>\n\n";
+
+        // Define printd
+        WrapperStream << "extern \"C\" double printd(double X) {\n";
+        WrapperStream << "    fprintf(stderr, \"%f\\n\", X);\n";
+        WrapperStream << "    return 0;\n";
+        WrapperStream << "}\n\n";
+
+        // Define printstr
+        WrapperStream << "extern \"C\" double printstr(const char* Str) {\n";
+        WrapperStream << "    fprintf(stderr, \"%s\", Str);\n";
+        WrapperStream << "    return 0;\n";
+        WrapperStream << "}\n\n";
+
+        // Define inputd
+        WrapperStream << "extern \"C\" double inputd() {\n";
+        WrapperStream << "    double X;\n";
+        WrapperStream << "    int result;\n";
+        WrapperStream << "    do {\n";
+        WrapperStream << "        result = scanf(\"%lf\", &X);\n";
+        WrapperStream << "        if (result != 1) {\n";
+        WrapperStream << "            int c;\n";
+        WrapperStream << "            while ((c = getchar()) != '\\n' && c != EOF) {}\n";
+        WrapperStream << "            fprintf(stderr, \"Invalid input. Please enter a number: \");\n";
+        WrapperStream << "        }\n";
+        WrapperStream << "    } while (result != 1);\n";
+        WrapperStream << "    return X;\n";
+        WrapperStream << "}\n\n";
+
+        // Declare the user's entry point
+        WrapperStream << "extern \"C\" double " << EntryPoint << "(double x);\n\n";
+
+        // The actual main() function
         WrapperStream << "int main() {\n";
         WrapperStream << "    double result = " << EntryPoint << "(10);\n";
         WrapperStream << "    return 0;\n";
         WrapperStream << "}\n";
 
-        // --- Step 4: Pipe to clang++ via stdin ---
-        std::string Command = "clang++ -x c++ - -o " + ExeFile + " " + Filename;
-        outs() << "Linking: " << Command << "\n";
+        // --- Step 4: Write wrapper to file and compile ---
+        stdfs::path TempDir = stdfs::temp_directory_path() / "meowmeow";
+        stdfs::create_directories(TempDir);
+        stdfs::path WrapperPath = TempDir / "wrapper.cpp";
 
-        FILE* pipe = popen(Command.c_str(), "w");
-        if (pipe) {
-            fwrite(WrapperStream.str().c_str(), 1, WrapperStream.str().size(), pipe);
-            int status = pclose(pipe);
-            if (status != 0) {
-                errs() << "Error: Linking failed with code " << status << "\n";
-            } else {
-                outs() << "Successfully linked to " << ExeFile << "\n";
-            }
-        } else {
-            errs() << "Error: Could not open pipe to clang++\n";
+        std::ofstream WrapperFile(WrapperPath.string());
+        WrapperFile << WrapperStream.str();
+        WrapperFile.close();
+
+        // --- Step 5: Compile wrapper to object file ---
+        std::string CompilerPath = "\"toolchain\\w64devkit\\bin\\g++.exe\"";
+        std::string CompileCmd = CompilerPath + " -c " + WrapperPath.string() + " -o " + TempDir.string() + "\\wrapper.o";
+        outs() << "Compiling: " << CompileCmd << "\n";
+        int CompileResult = system(CompileCmd.c_str());
+        if (CompileResult != 0) {
+            errs() << "Error: Failed to compile wrapper\n";
+            return;
         }
+
+        // --- Step 6: Link both object files ---
+        std::string LinkCmd = CompilerPath + " " + TempDir.string() + "\\wrapper.o " + Filename + " -o " + ExeFile;
+        outs() << "Linking: " << LinkCmd << "\n";
+        int LinkResult = system(LinkCmd.c_str());
+        if (LinkResult != 0) {
+            errs() << "Error: Linking failed with code " << LinkResult << "\n";
+        } else {
+            outs() << "Successfully linked to " << ExeFile << "\n";
+        }
+
+        // --- Step 7: Clean up ---
+        stdfs::remove(WrapperPath);
+        stdfs::remove(TempDir / "wrapper.o");
     }
 }
 
-void LinkToExecutable(const std::string &ObjectFile, const std::string &OutputFile, const std::string &EntryPoint) {
-    std::stringstream WrapperStream;
-
-    // --- Include necessary headers and define printd ---
-    WrapperStream << "#include <cstdio>\n";
-    WrapperStream << "#include <cstdlib>\n\n";
-
-    // Define printd directly in the wrapper so the linker can find it
-    WrapperStream << "extern \"C\" double printd(double X) {\n";
-    WrapperStream << "    fprintf(stderr, \"%f\\n\", X);\n";
-    WrapperStream << "    return 0;\n";
-    WrapperStream << "}\n\n";
-
-    // --- Declare the user's entry point ---
-    WrapperStream << "extern \"C\" double " << EntryPoint << "(double x);\n\n";
-
-    // --- The actual main() function ---
-    WrapperStream << "int main() {\n";
-    WrapperStream << "    double result = " << EntryPoint << "(10);\n";
-    WrapperStream << "    return 0;\n";
-    WrapperStream << "}\n";
-
-    // --- Use the portable w64devkit g++ from the toolchain folder (Windows path with quotes) ---
-    std::string CompilerPath = "\"toolchain\\w64devkit\\bin\\g++.exe\"";
-
-    stdfs::path TempDir = stdfs::temp_directory_path() / "meowmeow";
-    stdfs::create_directories(TempDir);
-    stdfs::path WrapperPath = TempDir / "wrapper.cpp";
-
-    std::ofstream WrapperFile(WrapperPath.string());
-    WrapperFile << WrapperStream.str();
-    WrapperFile.close();
-
-    // --- Compile wrapper to object file ---
-    std::string CompileCmd = CompilerPath + " -c " + WrapperPath.string() + " -o " + TempDir.string() + "\\wrapper.o";
-    outs() << "Compiling: " << CompileCmd << "\n";
-    int CompileResult = system(CompileCmd.c_str());
-    if (CompileResult != 0) {
-        errs() << "Error: Failed to compile wrapper\n";
-        return;
-    }
-
-    // --- Link both object files ---
-    std::string LinkCmd = CompilerPath + " " + TempDir.string() + "\\wrapper.o " + ObjectFile + " -o " + OutputFile;
-    outs() << "Linking: " << LinkCmd << "\n";
-    int LinkResult = system(LinkCmd.c_str());
-    if (LinkResult != 0) {
-        errs() << "Error: Linking failed with code " << LinkResult << "\n";
-    } else {
-        outs() << "Successfully linked to " << OutputFile << "\n";
-    }
-
-    // --- Clean up ---
-    stdfs::remove(WrapperPath);
-    stdfs::remove(TempDir / "wrapper.o");
-}
 int main(int argc, char **argv) {
     // Install standard binary operators
     BinopPrecedence['<'] = 10;
@@ -1558,64 +1552,66 @@ int main(int argc, char **argv) {
     std::string OutputFile = "output.o";
     bool LinkToExe = false;
 
-    fprintf(stderr, "DEBUG: main() started\n");  // <-- ADDED
+    fprintf(stderr, "DEBUG: main() started\n");
 
     // --- Parse command-line arguments ---
     for (int i = 1; i < argc; ++i) {
         std::string Arg = argv[i];
-        fprintf(stderr, "DEBUG: Arg[%d] = %s\n", i, Arg.c_str());  // <-- ADDED
+        fprintf(stderr, "DEBUG: Arg[%d] = %s\n", i, Arg.c_str());
 
         if (Arg == "-o" && i + 1 < argc) {
             OutputFile = argv[++i];
-            fprintf(stderr, "DEBUG: Output file = %s\n", OutputFile.c_str());  // <-- ADDED
+            fprintf(stderr, "DEBUG: Output file = %s\n", OutputFile.c_str());
             if (OutputFile.size() >= 4 &&
                 OutputFile.substr(OutputFile.size() - 4) == ".exe") {
                 LinkToExe = true;
-                fprintf(stderr, "DEBUG: Linking to EXE\n");  // <-- ADDED
+                fprintf(stderr, "DEBUG: Linking to EXE\n");
             }
         } else if (!FileMode && Arg[0] != '-') {
-            fprintf(stderr, "DEBUG: Opening file: %s\n", Arg.c_str());  // <-- ADDED
+            fprintf(stderr, "DEBUG: Opening file: %s\n", Arg.c_str());
             if (freopen(Arg.c_str(), "r", stdin) == nullptr) {
                 fprintf(stderr, "Could not open file: %s\n", Arg.c_str());
                 return 1;
             }
-            fprintf(stderr, "DEBUG: File opened successfully\n");  // <-- ADDED
+            fprintf(stderr, "DEBUG: File opened successfully\n");
             FileMode = true;
         }
     }
 
     // --- Initialize module ---
     FunctionProtos["printd"] = std::make_unique<PrototypeAST>("printd", std::vector<std::string>{"x"});
+    FunctionProtos["printstr"] = std::make_unique<PrototypeAST>("printstr", std::vector<std::string>{"x"});
+    FunctionProtos["inputd"] = std::make_unique<PrototypeAST>("inputd", std::vector<std::string>{});
     InitializeModuleAndPassManager();
     getNextToken();
 
     if (FileMode) {
-        fprintf(stderr, "DEBUG: Entering file mode\n");  // <-- ADDED
+        fprintf(stderr, "DEBUG: Entering file mode\n");
 
         // --- Parse the entire file ---
         while (CurTok != tok_eof) {
-            fprintf(stderr, "DEBUG: CurTok = %d\n", CurTok);  // <-- ADDED
+            fprintf(stderr, "DEBUG: CurTok = %d\n", CurTok);
             switch (CurTok) {
             case ';':
-                fprintf(stderr, "DEBUG: Found ';'\n");  // <-- ADDED
+                fprintf(stderr, "DEBUG: Found ';'\n");
                 getNextToken();
                 break;
             case tok_def:
-                fprintf(stderr, "DEBUG: Found tok_def (%d)\n", tok_def);  // <-- ADDED
+                fprintf(stderr, "DEBUG: Found tok_def (%d)\n", tok_def);
                 HandleDefinition();
                 break;
             case tok_extern:
-                fprintf(stderr, "DEBUG: Found tok_extern\n");  // <-- ADDED
+                fprintf(stderr, "DEBUG: Found tok_extern\n");
                 HandleExtern();
                 break;
             default:
-                fprintf(stderr, "DEBUG: Unknown token, calling HandleTopLevelExpression\n");  // <-- ADDED
+                fprintf(stderr, "DEBUG: Unknown token, calling HandleTopLevelExpression\n");
                 HandleTopLevelExpression();
                 break;
             }
         }
 
-        fprintf(stderr, "DEBUG: Reached EOF, parsing complete\n");  // <-- ADDED
+        fprintf(stderr, "DEBUG: Reached EOF, parsing complete\n");
 
         // --- Determine object file name ---
         std::string ObjectFile = OutputFile;
@@ -1623,48 +1619,14 @@ int main(int argc, char **argv) {
             ObjectFile = OutputFile.substr(0, OutputFile.size() - 4) + ".o";
         }
 
-        // --- Emit object file ---
-        EmitObjectFile(ObjectFile);
-
-        // --- If linking to exe, detect entry point and link ---
-        if (LinkToExe) {
-            // --- Detect Entry Point from the module ---
-            std::string EntryPoint;
-            std::vector<std::string> CommonEntryPoints = {
-                "main", "cattoshallmeow", "__init__", "start", "run", "entry", "go"
-            };
-
-            for (const auto& name : CommonEntryPoints) {
-                if (TheModule->getFunction(name)) {
-                    EntryPoint = name;
-                    break;
-                }
-            }
-
-            if (EntryPoint.empty()) {
-                for (auto &F : *TheModule) {
-                    if (!F.isDeclaration() && F.getName() != "__anon_expr") {
-                        EntryPoint = F.getName().str();
-                        break;
-                    }
-                }
-            }
-
-            if (EntryPoint.empty()) {
-                EntryPoint = "__anon_expr";
-            }
-
-            outs() << "Detected entry point: " << EntryPoint << "\n";
-
-            // --- Link with the detected entry point ---
-            LinkToExecutable(ObjectFile, OutputFile, EntryPoint);
-        }
+        // --- Emit object file (and link if needed) ---
+        EmitObjectFile(ObjectFile, LinkToExe, OutputFile);
     } else {
-        fprintf(stderr, "DEBUG: Entering REPL mode\n");  // <-- ADDED
+        fprintf(stderr, "DEBUG: Entering REPL mode\n");
         // --- REPL mode ---
         MainLoop();
     }
 
-    fprintf(stderr, "DEBUG: main() finished\n");  // <-- ADDED
+    fprintf(stderr, "DEBUG: main() finished\n");
     return 0;
 }

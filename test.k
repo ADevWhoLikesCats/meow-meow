@@ -1,2 +1,6 @@
 def cattoshallmeow(x)
-  print(43);
+  print("Enter a number: ");
+  x = input();
+  print("You entered: ");
+  print(x);
+  return x;
