@@ -7,9 +7,11 @@
 #include <map>
 #include <string>
 #include <cstdio>
+#include <vector>
 
 // Define globals
 std::map<char, int> BinopPrecedence;
+std::vector<std::string> LinkLibraries;
 
 int main(int argc, char **argv) {
     BinopPrecedence['<'] = 10;
@@ -20,25 +22,26 @@ int main(int argc, char **argv) {
     bool FileMode = false;
     std::string OutputFile = "output.o";
     bool LinkToExe = false;
-    std::string TargetTriple = llvm::sys::getDefaultTargetTriple(); // Default target
+    std::string TargetTriple = llvm::sys::getDefaultTargetTriple();
 
     // Parse command-line arguments
     for (int i = 1; i < argc; ++i) {
         std::string Arg = argv[i];
 
-        // -target flag
         if (Arg == "-target" && i + 1 < argc) {
             TargetTriple = argv[++i];
             fprintf(stderr, "DEBUG: Target set to: %s\n", TargetTriple.c_str());
         }
-        // -o flag
         else if (Arg == "-o" && i + 1 < argc) {
             OutputFile = argv[++i];
             if (OutputFile.size() >= 4 && OutputFile.substr(OutputFile.size() - 4) == ".exe") {
                 LinkToExe = true;
             }
         }
-        // Input file
+        else if (Arg == "-l" && i + 1 < argc) {
+            LinkLibraries.push_back(argv[++i]);
+            fprintf(stderr, "DEBUG: Linking library: %s.klib\n", argv[i]);
+        }
         else if (!FileMode && Arg[0] != '-') {
             if (freopen(Arg.c_str(), "r", stdin) == nullptr) {
                 fprintf(stderr, "Could not open file: %s\n", Arg.c_str());
@@ -54,13 +57,11 @@ int main(int argc, char **argv) {
     FunctionProtos["inputd"] = std::make_unique<PrototypeAST>("inputd", std::vector<std::string>{});
     InitializeModuleAndPassManager();
 
-    // Set the target triple
     TheModule->setTargetTriple(llvm::Triple(TargetTriple));
 
     getNextToken();
 
     if (FileMode) {
-        // Parse the entire file
         while (CurTok != tok_eof) {
             switch (CurTok) {
             case ';': getNextToken(); break;
@@ -70,16 +71,13 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Determine object file name
         std::string ObjectFile = OutputFile;
         if (LinkToExe) {
             ObjectFile = OutputFile.substr(0, OutputFile.size() - 4) + ".o";
         }
 
-        // Emit object file (and link if needed) with target
         EmitObjectFile(ObjectFile, LinkToExe, OutputFile, TargetTriple);
     } else {
-        // REPL mode
         MainLoop();
     }
 

@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 // Global LLVM state
 extern std::unique_ptr<llvm::LLVMContext> TheContext;
@@ -15,6 +16,7 @@ extern std::unique_ptr<llvm::Module> TheModule;
 extern std::unique_ptr<llvm::IRBuilder<>> Builder;
 extern std::map<std::string, llvm::AllocaInst *> NamedValues;
 extern std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos;
+extern std::vector<std::string> LinkLibraries;
 
 // Function lookup
 llvm::Function *getFunction(std::string Name);

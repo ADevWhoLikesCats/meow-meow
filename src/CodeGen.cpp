@@ -22,6 +22,63 @@ std::unique_ptr<llvm::Module> TheModule;
 std::unique_ptr<llvm::IRBuilder<>> Builder;
 std::map<std::string, llvm::AllocaInst *> NamedValues;
 std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos;
+std::vector<std::string> LinkLibraries;
+
+// ==================== .klib STRUCT ====================
+
+struct KlibSymbol {
+    std::string Name;
+    uint32_t Offset;
+    uint32_t Size;
+};
+
+// ==================== .klib READER ====================
+
+std::vector<uint8_t> ReadKlib(const std::string &Filename, std::vector<KlibSymbol> &Symbols) {
+    std::ifstream File(Filename, std::ios::binary);
+    if (!File) {
+        llvm::errs() << "Error: Could not open .klib file: " << Filename << "\n";
+        return {};
+    }
+
+    char Magic[4];
+    File.read(Magic, 4);
+    if (strncmp(Magic, "KLIB", 4) != 0) {
+        llvm::errs() << "Error: Invalid .klib file (wrong magic): " << Filename << "\n";
+        return {};
+    }
+
+    uint32_t Version;
+    File.read(reinterpret_cast<char*>(&Version), 4);
+    if (Version != 1) {
+        llvm::errs() << "Error: Unsupported .klib version: " << Version << "\n";
+        return {};
+    }
+
+    uint32_t Count;
+    File.read(reinterpret_cast<char*>(&Count), 4);
+
+    Symbols.resize(Count);
+    for (uint32_t i = 0; i < Count; ++i) {
+        uint32_t NameLen;
+        File.read(reinterpret_cast<char*>(&NameLen), 4);
+        std::string Name(NameLen, ' ');
+        File.read(&Name[0], NameLen);
+        Symbols[i].Name = Name;
+
+        File.read(reinterpret_cast<char*>(&Symbols[i].Offset), 4);
+        File.read(reinterpret_cast<char*>(&Symbols[i].Size), 4);
+    }
+
+    File.seekg(0, std::ios::end);
+    size_t CodeSize = File.tellg() - 16 - Count * 16;
+    File.seekg(16 + Count * 16, std::ios::beg);
+
+    std::vector<uint8_t> Code(CodeSize);
+    File.read(reinterpret_cast<char*>(Code.data()), CodeSize);
+
+    return Code;
+}
 
 // ==================== FUNCTION LOOKUP ====================
 
@@ -265,8 +322,21 @@ void EmitObjectFile(const std::string &Filename, bool LinkToExe, const std::stri
             return;
         }
 
-        // --- Step 6: Link both object files ---
-        std::string LinkCmd = CompilerPath + " " + TempDir.string() + "\\wrapper.o " + Filename + " -o " + ExeFile;
+        // --- Step 6: Link object file + .klib files ---
+        std::string LinkCmd = CompilerPath + " " + TempDir.string() + "\\wrapper.o " + Filename;
+
+        // Add .klib libraries
+        for (const auto &Lib : LinkLibraries) {
+            std::string KlibPath = Lib + ".klib";
+            if (stdfs::exists(KlibPath)) {
+                LinkCmd += " " + KlibPath;
+                llvm::outs() << "Linking library: " << KlibPath << "\n";
+            } else {
+                llvm::errs() << "Warning: Library not found: " << KlibPath << "\n";
+            }
+        }
+
+        LinkCmd += " -o " + ExeFile;
         llvm::outs() << "Linking: " << LinkCmd << "\n";
         int LinkResult = system(LinkCmd.c_str());
         if (LinkResult != 0) {
