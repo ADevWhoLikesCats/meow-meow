@@ -1482,27 +1482,33 @@ static void EmitObjectFile(const std::string &Filename, bool LinkToExe = false, 
         WrapperStream << "    return 0;\n";
         WrapperStream << "}\n\n";
 
-        // Define inputd
+        // Define inputd.
         WrapperStream << "extern \"C\" double inputd() {\n";
         WrapperStream << "    double X;\n";
-        WrapperStream << "    int result;\n";
+        WrapperStream << "    char buffer[128];\n";
+        WrapperStream << "    int hasNumber = 0;\n";
         WrapperStream << "    do {\n";
-        WrapperStream << "        result = scanf(\"%lf\", &X);\n";
-        WrapperStream << "        if (result != 1) {\n";
-        WrapperStream << "            int c;\n";
-        WrapperStream << "            while ((c = getchar()) != '\\n' && c != EOF) {}\n";
-        WrapperStream << "            fprintf(stderr, \"Invalid input. Please enter a number: \");\n";
+        WrapperStream << "        fprintf(stderr, \"Enter a number: \");\n";
+        WrapperStream << "        fflush(stderr);\n";
+        WrapperStream << "        if (fgets(buffer, sizeof(buffer), stdin) == NULL) {\n";
+        WrapperStream << "            clearerr(stdin);\n";
+        WrapperStream << "            continue;\n";
         WrapperStream << "        }\n";
-        WrapperStream << "    } while (result != 1);\n";
+        WrapperStream << "        if (sscanf(buffer, \"%lf\", &X) == 1) hasNumber = 1;\n";
+        WrapperStream << "        if (!hasNumber) {\n";
+        WrapperStream << "            fprintf(stderr, \"Invalid input. Please enter a number.\\n\");\n";
+        WrapperStream << "        }\n";
+        WrapperStream << "    } while (!hasNumber);\n";
         WrapperStream << "    return X;\n";
         WrapperStream << "}\n\n";
 
         // Declare the user's entry point
         WrapperStream << "extern \"C\" double " << EntryPoint << "(double x);\n\n";
 
-        // The actual main() function
-        WrapperStream << "int main() {\n";
-        WrapperStream << "    double result = " << EntryPoint << "(10);\n";
+        // The actual main() function with command-line argument support
+        WrapperStream << "int main(int argc, char** argv) {\n";
+        WrapperStream << "    double x = (argc > 1) ? atof(argv[1]) : 10;\n";
+        WrapperStream << "    double result = " << EntryPoint << "(x);\n";
         WrapperStream << "    return 0;\n";
         WrapperStream << "}\n";
 
