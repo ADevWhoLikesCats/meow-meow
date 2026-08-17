@@ -110,7 +110,7 @@ void MainLoop() {
 
 // ==================== EMIT OBJECT FILE ====================
 
-void EmitObjectFile(const std::string &Filename, bool LinkToExe, const std::string &ExeFile) {
+void EmitObjectFile(const std::string &Filename, bool LinkToExe, const std::string &ExeFile, const std::string &TargetTriple) {
     // --- DIAGNOSTIC: Print all functions in the module ---
     llvm::outs() << "Functions in module before emitting object file:\n";
     for (auto &F : *TheModule) {
@@ -125,8 +125,9 @@ void EmitObjectFile(const std::string &Filename, bool LinkToExe, const std::stri
     llvm::InitializeAllAsmParsers();
     llvm::InitializeAllAsmPrinters();
 
-    auto TargetTriple = llvm::sys::getDefaultTargetTriple();
-    TheModule->setTargetTriple(llvm::Triple(TargetTriple));
+    // Use the provided target triple, or fallback to default
+    std::string Triple = TargetTriple.empty() ? llvm::sys::getDefaultTargetTriple() : TargetTriple;
+    TheModule->setTargetTriple(llvm::Triple(Triple));
 
     std::string Error;
     auto Target = llvm::TargetRegistry::lookupTarget(TheModule->getTargetTriple(), Error);
@@ -139,7 +140,7 @@ void EmitObjectFile(const std::string &Filename, bool LinkToExe, const std::stri
     auto Features = "";
     llvm::TargetOptions opt;
     auto TheTargetMachine = Target->createTargetMachine(
-        llvm::Triple(TargetTriple), CPU, Features, opt, llvm::Reloc::PIC_);
+        llvm::Triple(Triple), CPU, Features, opt, llvm::Reloc::PIC_);
 
     if (!TheTargetMachine) {
         llvm::errs() << "Error: Could not create target machine\n";
@@ -165,7 +166,7 @@ void EmitObjectFile(const std::string &Filename, bool LinkToExe, const std::stri
 
     pass.run(*TheModule);
     dest.flush();
-    llvm::outs() << "Wrote " << Filename << "\n";
+    llvm::outs() << "Wrote " << Filename << " for target: " << Triple << "\n";
 
     // --- Step 2: If linking to exe, detect entry point and link ---
     if (LinkToExe && !ExeFile.empty()) {
@@ -278,11 +279,4 @@ void EmitObjectFile(const std::string &Filename, bool LinkToExe, const std::stri
         stdfs::remove(WrapperPath);
         stdfs::remove(TempDir / "wrapper.o");
     }
-}
-
-void LinkToExecutable(const std::string &ObjectFile, const std::string &OutputFile, const std::string &EntryPoint) {
-    // This function is now integrated into EmitObjectFile.
-    // It's kept here for compatibility but is no longer used directly.
-    // The linking is handled inside EmitObjectFile when LinkToExe is true.
-    llvm::outs() << "Note: LinkToExecutable is deprecated. Linking is now handled in EmitObjectFile.\n";
 }

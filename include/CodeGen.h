@@ -25,9 +25,8 @@ llvm::AllocaInst *CreateEntryBlockAlloca(llvm::Function *TheFunction, llvm::Stri
 // Module initialization
 void InitializeModuleAndPassManager();
 
-// Object file emission and linking
-void EmitObjectFile(const std::string &Filename, bool LinkToExe = false, const std::string &ExeFile = "");
-void LinkToExecutable(const std::string &ObjectFile, const std::string &OutputFile, const std::string &EntryPoint);
+// Object file emission and linking (with target support)
+void EmitObjectFile(const std::string &Filename, bool LinkToExe = false, const std::string &ExeFile = "", const std::string &TargetTriple = "");
 
 // Top-level handlers
 void HandleDefinition();
