@@ -1,4 +1,3 @@
-def main(x)
-    asm("mov $1, %rax");
-    asm("ret");
-    return 0;
+def kalo(x)
+    let a = 42;
+    return a;
