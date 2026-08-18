@@ -1,6 +1,3 @@
 def kalo(x)
-    ASM_INTEL
-        mov eax, 42
-        ret
-    END_ASM
-    return 0
+    (x + 5 * 17 - 14);
+    
