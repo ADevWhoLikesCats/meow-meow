@@ -274,6 +274,111 @@ std::unique_ptr<ExprAST> ParseVarExpr() {
     return std::make_unique<VarExprAST>(std::move(VarNames), std::move(Body));
 }
 
+/// letexpr ::= 'let' identifier '=' expression
+std::unique_ptr<ExprAST> ParseLetExpr() {
+    getNextToken(); // eat 'let'
+
+    if (CurTok != tok_identifier)
+        return LogError("expected identifier after let");
+
+    std::string Name = IdentifierStr;
+    getNextToken(); // eat identifier
+
+    if (CurTok != '=')
+        return LogError("expected '=' after identifier");
+    getNextToken(); // eat '='
+
+    auto Init = ParseExpression();
+    if (!Init) return nullptr;
+
+    return std::make_unique<LetExprAST>(Name, std::move(Init));
+}
+
+
+
+
+    
+
+std::unique_ptr<ExprAST> ParseAsmBlock() {
+    bool UseIntelSyntax;
+
+    if (CurTok == tok_asm_intel) {
+        UseIntelSyntax = true;
+        getNextToken();
+    } else if (CurTok == tok_asm_att) {
+        UseIntelSyntax = false;
+        getNextToken();
+    } else {
+        return LogError("Expected ASM_INTEL or ASM_ATT");
+    }
+
+    std::vector<std::string> Instructions;
+
+    // Read instructions until END_ASM
+    while (CurTok != tok_end_asm && CurTok != tok_eof) {
+        // Skip newlines and whitespace
+        if (CurTok == ';' || CurTok == '\n') {
+            getNextToken();
+            continue;
+        }
+
+        // Read the entire line as a string
+        std::string Line;
+        while (CurTok != tok_end_asm && CurTok != tok_eof && CurTok != ';' && CurTok != '\n') {
+            if (CurTok == tok_identifier) {
+                Line += IdentifierStr;
+            } else if (CurTok == tok_number) {
+                Line += std::to_string(NumVal);
+            } else if (CurTok == tok_string) {
+                Line += "\"" + StringVal + "\"";
+            } else {
+                // For other tokens (operators, punctuation), add them as characters
+                Line += (char)CurTok;
+            }
+            getNextToken();
+        }
+
+        // Trim the line
+        if (!Line.empty()) {
+            Instructions.push_back(Line);
+        }
+
+        // Skip to the next line if we hit a semicolon
+        if (CurTok == ';') {
+            getNextToken();
+        }
+    }
+
+    if (CurTok != tok_end_asm)
+        return LogError("Expected END_ASM");
+    getNextToken();
+
+    return std::make_unique<AsmBlockExprAST>(Instructions, UseIntelSyntax);
+}
+
+/// addressofexpr ::= '&' expression
+std::unique_ptr<ExprAST> ParseAddressOf() {
+    getNextToken(); // eat '&'
+    auto Operand = ParseExpression();
+    if (!Operand) return nullptr;
+    return std::make_unique<AddressOfExprAST>(std::move(Operand));
+}
+
+/// derefexpr ::= '*' expression
+std::unique_ptr<ExprAST> ParseDeref() {
+    getNextToken(); // eat '*'
+    auto Operand = ParseExpression();
+    if (!Operand) return nullptr;
+    return std::make_unique<DerefExprAST>(std::move(Operand));
+}
+
+/// nullexpr ::= 'null'
+std::unique_ptr<ExprAST> ParseNull() {
+    getNextToken(); // eat 'null'
+    return std::make_unique<NullExprAST>();
+}
+
+
 /// primary ::= identifierexpr | numberexpr | parenexpr | ifexpr | forexpr | varexpr | print | input | asm
 std::unique_ptr<ExprAST> ParsePrimary() {
     switch (CurTok) {
@@ -297,14 +402,43 @@ std::unique_ptr<ExprAST> ParsePrimary() {
         return ParseInputExpr();
     case tok_asm:
         return ParseAsmExpr();
+    case tok_asm_intel:
+    case tok_asm_att:
+        return ParseAsmBlock();
+    case tok_null:
+        return ParseNull();
+    case tok_ampersand:
+        return ParseAddressOf();
+    case tok_star:
+        return ParseDeref();
+    case tok_let:
+        return ParseLetExpr();            
     }
 }
 
 /// unary ::= primary | '!' unary
 std::unique_ptr<ExprAST> ParseUnary() {
+    // Handle address-of operator
+    if (CurTok == tok_ampersand) {
+        getNextToken(); // eat '&'
+        auto Operand = ParseUnary(); // Parse the operand (highest precedence)
+        if (!Operand) return nullptr;
+        return std::make_unique<AddressOfExprAST>(std::move(Operand));
+    }
+
+    // Handle dereference operator
+    if (CurTok == tok_star) {
+        getNextToken(); // eat '*'
+        auto Operand = ParseUnary(); // Parse the operand (highest precedence)
+        if (!Operand) return nullptr;
+        return std::make_unique<DerefExprAST>(std::move(Operand));
+    }
+
+    // If not a unary operator, parse primary
     if (!isascii(CurTok) || CurTok == '(' || CurTok == ',')
         return ParsePrimary();
 
+    // Handle other unary operators (like '!')
     int Opc = CurTok;
     getNextToken();
     if (auto Operand = ParseUnary())
@@ -403,6 +537,7 @@ std::unique_ptr<PrototypeAST> ParsePrototype() {
 
 /// definition ::= 'def' prototype expression
 std::unique_ptr<FunctionAST> ParseDefinition() {
+    fprintf(stderr, "DEBUG: ParseDefinition() called\n");
     getNextToken(); // eat 'def'
     auto Proto = ParsePrototype();
     if (!Proto) return nullptr;

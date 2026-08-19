@@ -21,7 +21,15 @@ enum Token {
     tok_print = -14,
     tok_string = -15,
     tok_input = -16,
-    tok_asm = -17
+    tok_asm = -17,
+    tok_asm_intel = -18,
+    tok_asm_att =  -19,
+    tok_end_asm = -20,
+    tok_star = -21,
+    tok_ampersand = -22,
+    tok_null = -23,
+    tok_let = -24
+
 };
 
 // Global lexer state

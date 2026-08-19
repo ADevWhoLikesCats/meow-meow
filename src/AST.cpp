@@ -217,6 +217,67 @@ llvm::Value *VarExprAST::codegen() {
     return BodyVal;
 }
 
+llvm::Value *LetExprAST::codegen() {
+    // Get the current function
+    llvm::Function *TheFunction = Builder->GetInsertBlock()->getParent();
+
+    // Codegen the initializer
+    llvm::Value *InitVal = Init->codegen();
+    if (!InitVal) return nullptr;
+
+    // Create an alloca for the variable
+    llvm::AllocaInst *Alloca = CreateEntryBlockAlloca(TheFunction, Name);
+
+    // Store the initial value
+    Builder->CreateStore(InitVal, Alloca);
+
+    // Add the variable to the symbol table
+    NamedValues[Name] = Alloca;
+
+    // Return the initial value
+    return InitVal;
+}
+
+
+llvm::Value *AsmBlockExprAST::codegen() {
+    // Join all instructions into a single string with newlines and tabs
+    std::string AsmString;
+    for (size_t i = 0; i < Instructions.size(); ++i) {
+        if (i > 0) {
+            AsmString += "\n\t";
+        }
+        AsmString += Instructions[i];
+    }
+
+    // Function type: void()
+    llvm::FunctionType *FTy = llvm::FunctionType::get(llvm::Type::getVoidTy(*TheContext), false);
+
+    // Constraint string: empty for no operands
+    std::string Constraints = "";
+    
+    // Has side effects? Yes.
+    bool HasSideEffects = true;
+
+    // Choose the dialect
+    llvm::InlineAsm::AsmDialect Dialect = UseIntelSyntax 
+        ? llvm::InlineAsm::AD_Intel 
+        : llvm::InlineAsm::AD_ATT;
+
+    // Create the inline assembly object
+    llvm::InlineAsm *IA = llvm::InlineAsm::get(
+        FTy,
+        AsmString,
+        Constraints,
+        HasSideEffects,
+        false,   // IsAlignStack
+        Dialect
+    );
+
+    // Call it
+    return Builder->CreateCall(IA);
+}
+
+
 llvm::Value *AsmExprAST::codegen() {
     llvm::FunctionType *FTy = llvm::FunctionType::get(llvm::Type::getVoidTy(*TheContext), false);
     std::string Constraints = "";
@@ -238,6 +299,30 @@ llvm::Function *PrototypeAST::codegen() {
 
     return F;
 }
+
+llvm::Value *AddressOfExprAST::codegen() {
+    llvm::Value *V = Operand->codegen();
+    if (!V) return nullptr;
+    // Get the address of the variable
+    return V;
+}
+
+llvm::Value *DerefExprAST::codegen() {
+    llvm::Value *V = Operand->codegen();
+    if (!V) return nullptr;
+    // Load from the pointer
+    return Builder->CreateLoad(llvm::Type::getInt32Ty(*TheContext), V);
+}
+
+llvm::Value *NullExprAST::codegen() {
+    return llvm::Constant::getNullValue(llvm::Type::getInt32Ty(*TheContext));
+}
+
+llvm::Value *PointerTypeAST::codegen() {
+    // This is a type, not a value — return null
+    return nullptr;
+}
+
 
 llvm::Function *FunctionAST::codegen() {
     auto &P = *Proto;

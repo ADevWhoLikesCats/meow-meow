@@ -108,6 +108,55 @@ public:
     llvm::Value *codegen() override;
 };
 
+/// Inline assembly block (ASM_INTEL/ASM_ATT ... END_ASM)
+class AsmBlockExprAST : public ExprAST {
+    std::vector<std::string> Instructions;
+    bool UseIntelSyntax;
+
+public:
+    AsmBlockExprAST(const std::vector<std::string> &Instructions, bool UseIntelSyntax)
+        : Instructions(Instructions), UseIntelSyntax(UseIntelSyntax) {}
+
+    llvm::Value *codegen() override;
+};
+
+// Address-of expression (&x)
+class AddressOfExprAST : public ExprAST {
+    std::unique_ptr<ExprAST> Operand;
+public:
+    AddressOfExprAST(std::unique_ptr<ExprAST> Operand)
+        : Operand(std::move(Operand)) {}
+    llvm::Value *codegen() override;
+};
+
+// Dereference expression (*ptr)
+class DerefExprAST : public ExprAST {
+    std::unique_ptr<ExprAST> Operand;
+public:
+    DerefExprAST(std::unique_ptr<ExprAST> Operand)
+        : Operand(std::move(Operand)) {}
+    llvm::Value *codegen() override;
+};
+
+// Null pointer
+class NullExprAST : public ExprAST {
+public:
+    NullExprAST() {}
+    llvm::Value *codegen() override;
+};
+
+
+
+// Pointer type (for type declarations)
+class PointerTypeAST : public ExprAST {
+    std::unique_ptr<ExprAST> PointeeType;
+public:
+    PointerTypeAST(std::unique_ptr<ExprAST> PointeeType)
+        : PointeeType(std::move(PointeeType)) {}
+    llvm::Value *codegen() override;
+};
+
+
 // Inline assembly
 class AsmExprAST : public ExprAST {
     std::string AsmString;
@@ -115,6 +164,19 @@ public:
     AsmExprAST(const std::string &AsmString) : AsmString(AsmString) {}
     llvm::Value *codegen() override;
 };
+
+/// LetExprAST - Represents a variable declaration: let name = expr
+class LetExprAST : public ExprAST {
+    std::string Name;
+    std::unique_ptr<ExprAST> Init;
+
+public:
+    LetExprAST(const std::string &Name, std::unique_ptr<ExprAST> Init)
+        : Name(Name), Init(std::move(Init)) {}
+
+    llvm::Value *codegen() override;
+};
+
 
 // Prototype
 class PrototypeAST {

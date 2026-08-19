@@ -21,7 +21,10 @@ int gettok() {
         while (isalnum((LastChar = getchar())))
             IdentifierStr += LastChar;
 
-        if (IdentifierStr == "def") return tok_def;
+        if (IdentifierStr == "def") {
+            fprintf(stderr, "DEBUG: Found 'def' in lexer\n");
+            return tok_def;
+        }
         if (IdentifierStr == "extern") return tok_extern;
         if (IdentifierStr == "if") return tok_if;
         if (IdentifierStr == "then") return tok_then;
@@ -34,6 +37,11 @@ int gettok() {
         if (IdentifierStr == "print") return tok_print;
         if (IdentifierStr == "input") return tok_input;
         if (IdentifierStr == "asm") return tok_asm;
+        if (IdentifierStr == "ASM_INTEL") return tok_asm_intel;
+        if (IdentifierStr == "ASM_ATT") return tok_asm_att;
+        if (IdentifierStr == "END_ASM") return tok_end_asm;
+        if (IdentifierStr == "null") return tok_null;
+        if (IdentifierStr == "let") return tok_let;
         return tok_identifier;
     }
 
@@ -68,6 +76,16 @@ int gettok() {
 
     // EOF
     if (LastChar == EOF) return tok_eof;
+
+    // * and & handling
+    if (LastChar == '*') {
+        LastChar = getchar();
+        return tok_star;
+    }
+    if (LastChar == '&') {
+        LastChar = getchar();
+        return tok_ampersand;
+    }
 
     // Otherwise, return the character as its ASCII value
     int ThisChar = LastChar;
