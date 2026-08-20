@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <regex>
 #include <array>
+#include <iostream>
 
 namespace stdfs = std::filesystem;
 
@@ -110,9 +111,14 @@ llvm::AllocaInst *CreateEntryBlockAlloca(llvm::Function *TheFunction, llvm::Stri
 // ==================== MODULE INITIALIZATION ====================
 
 void InitializeModuleAndPassManager() {
+    std::cout << "DEBUG: InitializeModuleAndPassManager() START" << std::endl;
     TheContext = std::make_unique<llvm::LLVMContext>();
+    std::cout << "DEBUG: Context created" << std::endl;
     TheModule = std::make_unique<llvm::Module>("my cool jit", *TheContext);
+    std::cout << "DEBUG: Module created" << std::endl;
     Builder = std::make_unique<llvm::IRBuilder<>>(*TheContext);
+    std::cout << "DEBUG: Builder created" << std::endl;
+    std::cout << "DEBUG: InitializeModuleAndPassManager() END" << std::endl;
 }
 
 

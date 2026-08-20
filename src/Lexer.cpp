@@ -2,6 +2,8 @@
 #include <cstdio>
 #include <cctype>
 #include <string>
+#include <iostream>
+
 
 // Define globals
 std::string IdentifierStr;
@@ -10,10 +12,14 @@ std::string StringVal;
 
 int gettok() {
     static int LastChar = ' ';
+    
+    std::cout << "DEBUG: gettok() called, LastChar = " << LastChar << std::endl;  // ← ADD THIS
 
     // Skip whitespace
     while (isspace(LastChar))
-        LastChar = getchar();
+        LastChar = std::cin.get();
+
+    std::cout << "DEBUG: After skipping whitespace, LastChar = " << LastChar << std::endl;  // ← ADD THIS
 
     // Identifiers and keywords
     if (isalpha(LastChar)) {
