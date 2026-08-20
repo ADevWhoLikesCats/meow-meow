@@ -140,6 +140,29 @@ public:
     // Reset lexer state
     CurTok = 0;
     int firstToken = getNextToken();
+
+    std::cout << "DEBUG: getNextToken() returned: " << firstToken << std::endl;
+    std::cout << "DEBUG: CurTok = " << CurTok << std::endl;
+
+    // DEBUG: Print what token it is
+    if (CurTok == tok_def) {
+        std::cout << "DEBUG: CurTok is tok_def" << std::endl;
+    } else if (CurTok == tok_eof) {
+        std::cout << "DEBUG: CurTok is tok_eof" << std::endl;
+    } else if (CurTok == tok_identifier) {
+        std::cout << "DEBUG: CurTok is tok_identifier: " << IdentifierStr << std::endl;
+    } else if (CurTok == tok_extern) {
+        std::cout << "DEBUG: CurTok is tok_extern" << std::endl;
+    } else if (CurTok == tok_number) {
+        std::cout << "DEBUG: CurTok is tok_number: " << NumVal << std::endl;
+    } else if (CurTok > 0 && CurTok < 256) {
+        std::cout << "DEBUG: CurTok is character: " << (char)CurTok << std::endl;
+    } else {
+        std::cout << "DEBUG: CurTok is unknown token: " << CurTok << std::endl;
+    }
+
+    std::cout << "DEBUG: tok_eof = " << tok_eof << std::endl;
+    std::cout << "DEBUG: Starting parse loop....." << std::endl;
     
     std::cout << "DEBUG: getNextToken() returned: " << firstToken << std::endl;
     std::cout << "DEBUG: tok_eof = " << tok_eof << std::endl;
