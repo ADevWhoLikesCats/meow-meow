@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <CL/opencl.hpp>
+#include <CL/cl.h>
 #include <string>
 #include <vector>
 #include <map>
@@ -38,14 +38,14 @@ struct KernelInfo {
 
 class OpenCLRuntime {
 private:
-    cl::Context context;
-    cl::Device device;
-    cl::CommandQueue queue;
-    cl::Program program;
+    cl_context context;
+    cl_device_id device;
+    cl_command_queue queue;
+    cl_program program;
     
-    std::map<std::string, cl::Kernel> kernels;
-    std::map<std::string, std::vector<cl::Buffer>> buffers;
-    std::map<std::string, KernelInfo> kernelInfos;
+    std::map<std::string, cl_kernel> kernels;
+    std::map<std::string, std::vector<cl_mem>> buffers;
+    std::map<std::string, KernelInfo> kernelInfosMap;
     
     bool initialized = false;
     std::string lastError;
@@ -66,11 +66,11 @@ public:
     
     // Create buffers
     template<typename T>
-    cl::Buffer createBuffer(const std::string& kernelName, 
-                            int argIndex,
-                            size_t count,
-                            T* data = nullptr,
-                            bool readOnly = false);
+    cl_mem createBuffer(const std::string& kernelName, 
+                        int argIndex,
+                        size_t count,
+                        T* data = nullptr,
+                        bool readOnly = false);
     
     // Set kernel arguments
     template<typename T>
@@ -78,7 +78,7 @@ public:
     
     bool setKernelArgBuffer(const std::string& kernelName, 
                             int index, 
-                            const cl::Buffer& buffer);
+                            const cl_mem& buffer);
     
     // Run kernel
     bool runKernel(const std::string& kernelName, 
@@ -118,9 +118,7 @@ public:
     const KernelInfo& getKernelInfo(const std::string& name) const;
     
 private:
-    bool selectDevice(bool preferGPU);
-    bool buildProgram(const std::vector<unsigned char>& spirvBinary);
-    void extractKernelInfo(const std::vector<KernelInfo>& infos);
+    bool selectDevice(bool preferGPU, const std::vector<cl_platform_id>& platforms);
 };
 
 // ====================================================================
@@ -128,28 +126,34 @@ private:
 // ====================================================================
 
 template<typename T>
-cl::Buffer OpenCLRuntime::createBuffer(const std::string& kernelName,
-                                       int argIndex,
-                                       size_t count,
-                                       T* data,
-                                       bool readOnly) {
+cl_mem OpenCLRuntime::createBuffer(const std::string& kernelName,
+                                   int argIndex,
+                                   size_t count,
+                                   T* data,
+                                   bool readOnly) {
     if (!initialized) {
         lastError = "Runtime not initialized";
-        return cl::Buffer();
+        return nullptr;
     }
     
+    cl_int err;
     cl_mem_flags flags = readOnly ? CL_MEM_READ_ONLY : CL_MEM_READ_WRITE;
     if (data) {
         flags |= CL_MEM_COPY_HOST_PTR;
     }
     
-    cl::Buffer buffer(context, flags, count * sizeof(T), data);
+    cl_mem buffer = clCreateBuffer(context, flags, count * sizeof(T), data, &err);
+    if (err != CL_SUCCESS) {
+        lastError = "Failed to create buffer: " + std::to_string(err);
+        return nullptr;
+    }
+    
     buffers[kernelName].push_back(buffer);
     
     // Set kernel argument
     auto it = kernels.find(kernelName);
     if (it != kernels.end()) {
-        it->second.setArg(argIndex, buffer);
+        clSetKernelArg(it->second, argIndex, sizeof(cl_mem), &buffer);
     }
     
     return buffer;
@@ -165,7 +169,11 @@ bool OpenCLRuntime::setKernelArg(const std::string& kernelName,
         return false;
     }
     
-    it->second.setArg(index, value);
+    cl_int err = clSetKernelArg(it->second, index, sizeof(T), &value);
+    if (err != CL_SUCCESS) {
+        lastError = "Failed to set kernel arg: " + std::to_string(err);
+        return false;
+    }
     return true;
 }
 
@@ -185,11 +193,9 @@ bool OpenCLRuntime::readBuffer(const std::string& kernelName,
         return false;
     }
     
-    cl_int err = queue.enqueueReadBuffer(it->second[bufferIndex], 
-                                         CL_TRUE, 
-                                         0, 
-                                         count * sizeof(T), 
-                                         data);
+    cl_int err = clEnqueueReadBuffer(queue, it->second[bufferIndex], 
+                                     CL_TRUE, 0, count * sizeof(T), 
+                                     data, 0, nullptr, nullptr);
     
     if (err != CL_SUCCESS) {
         lastError = "Failed to read buffer: " + std::to_string(err);

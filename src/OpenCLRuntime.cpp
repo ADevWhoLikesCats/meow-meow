@@ -4,81 +4,142 @@
 #include "OpenCLRuntime.h"
 #include <iostream>
 #include <sstream>
+#include <cstring>
+#include <CL/cl.h>
 
 namespace KLang {
 
 OpenCLRuntime::OpenCLRuntime() {
     initialized = false;
+    context = nullptr;
+    device = nullptr;
+    queue = nullptr;
+    program = nullptr;
 }
 
 OpenCLRuntime::~OpenCLRuntime() {
-    // Cleanup
+    if (queue) {
+        clReleaseCommandQueue(queue);
+        queue = nullptr;
+    }
+    if (program) {
+        clReleaseProgram(program);
+        program = nullptr;
+    }
+    if (context) {
+        clReleaseContext(context);
+        context = nullptr;
+    }
+    
+    // Release kernels
+    for (auto& kv : kernels) {
+        if (kv.second) {
+            clReleaseKernel(kv.second);
+        }
+    }
+    kernels.clear();
+    
+    // Release buffers
+    for (auto& kv : buffers) {
+        for (auto& buf : kv.second) {
+            if (buf) {
+                clReleaseMemObject(buf);
+            }
+        }
+    }
+    buffers.clear();
 }
 
 bool OpenCLRuntime::initialize(bool preferGPU) {
-    try {
-        std::vector<cl::Platform> platforms;
-        cl::Platform::get(&platforms);
-        
-        if (platforms.empty()) {
-            lastError = "No OpenCL platforms found";
-            return false;
-        }
-        
-        // Select device
-        if (!selectDevice(preferGPU)) {
-            return false;
-        }
-        
-        // Create context and command queue
-        context = cl::Context(device);
-        queue = cl::CommandQueue(context, device);
-        
-        initialized = true;
-        return true;
-        
-    } catch (const cl::Error& e) {
-        lastError = "OpenCL error: " + std::string(e.what()) + 
-                    " (code: " + std::to_string(e.err()) + ")";
-        return false;
-    } catch (const std::exception& e) {
-        lastError = "Error: " + std::string(e.what());
+    cl_int err;
+    
+    // Get platforms
+    cl_uint numPlatforms;
+    err = clGetPlatformIDs(0, nullptr, &numPlatforms);
+    if (err != CL_SUCCESS) {
+        lastError = "Failed to get platform count: " + std::to_string(err);
         return false;
     }
+    
+    if (numPlatforms == 0) {
+        lastError = "No OpenCL platforms found";
+        return false;
+    }
+    
+    std::vector<cl_platform_id> platforms(numPlatforms);
+    err = clGetPlatformIDs(numPlatforms, platforms.data(), nullptr);
+    if (err != CL_SUCCESS) {
+        lastError = "Failed to get platforms: " + std::to_string(err);
+        return false;
+    }
+    
+    // Select device
+    if (!selectDevice(preferGPU, platforms)) {
+        return false;
+    }
+    
+    // Create context
+    cl_context_properties props[] = {
+        CL_CONTEXT_PLATFORM, (cl_context_properties)platforms[0],
+        0
+    };
+    
+    context = clCreateContext(props, 1, &device, nullptr, nullptr, &err);
+    if (err != CL_SUCCESS) {
+        lastError = "Failed to create context: " + std::to_string(err);
+        return false;
+    }
+    
+    // Create command queue (use clCreateCommandQueueWithProperties for newer OpenCL)
+    #ifdef CL_VERSION_2_0
+    cl_queue_properties queueProps[] = {0};
+    queue = clCreateCommandQueueWithProperties(context, device, queueProps, &err);
+    #else
+    queue = clCreateCommandQueue(context, device, 0, &err);
+    #endif
+    
+    if (err != CL_SUCCESS) {
+        lastError = "Failed to create command queue: " + std::to_string(err);
+        clReleaseContext(context);
+        context = nullptr;
+        return false;
+    }
+    
+    initialized = true;
+    return true;
 }
 
-bool OpenCLRuntime::selectDevice(bool preferGPU) {
-    try {
-        std::vector<cl::Platform> platforms;
-        cl::Platform::get(&platforms);
+bool OpenCLRuntime::selectDevice(bool preferGPU, const std::vector<cl_platform_id>& platforms) {
+    cl_int err;
+    
+    for (auto platform : platforms) {
+        cl_uint numDevices;
         
-        for (auto& platform : platforms) {
-            std::vector<cl::Device> devices;
-            
-            // Try GPU first if preferred
-            if (preferGPU) {
-                platform.getDevices(CL_DEVICE_TYPE_GPU, &devices);
-                if (!devices.empty()) {
-                    device = devices[0];
-                    return true;
-                }
-            }
-            
-            // Fallback to CPU
-            platform.getDevices(CL_DEVICE_TYPE_CPU, &devices);
-            if (!devices.empty()) {
+        // Try GPU first
+        err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, nullptr, &numDevices);
+        if (err == CL_SUCCESS && numDevices > 0) {
+            std::vector<cl_device_id> devices(numDevices);
+            err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, numDevices, devices.data(), nullptr);
+            if (err == CL_SUCCESS) {
                 device = devices[0];
                 return true;
             }
         }
         
-        lastError = "No suitable OpenCL device found";
-        return false;
-        
-    } catch (const cl::Error& e) {
-        lastError = "Failed to select device: " + std::string(e.what());
-        return false;
+        // Try CPU
+        err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_CPU, 0, nullptr, &numDevices);
+        if (err == CL_SUCCESS && numDevices > 0) {
+            std::vector<cl_device_id> devices(numDevices);
+            err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_CPU, numDevices, devices.data(), nullptr);
+            if (err == CL_SUCCESS) {
+                device = devices[0];
+                return true;
+            }
+        }
     }
+    
+    lastError = "No suitable OpenCL device found";
+    return false;
 }
 
 bool OpenCLRuntime::loadSPIRV(const std::vector<unsigned char>& spirvBinary,
@@ -88,47 +149,55 @@ bool OpenCLRuntime::loadSPIRV(const std::vector<unsigned char>& spirvBinary,
         return false;
     }
     
-    try {
-        cl::Program::Binaries binaries;
-        // FIXED: Use cl::Program::Binary constructor
-        binaries.push_back({spirvBinary.data(), spirvBinary.size()});
-        
-        cl_int err;
-        program = cl::Program(context, {device}, binaries, nullptr, &err);
-        if (err != CL_SUCCESS) {
-            lastError = "Failed to create program from SPIR-V: " + std::to_string(err);
-            return false;
-        }
-        
-        // Build program
-        err = program.build({device});
-        if (err != CL_SUCCESS) {
-            std::string buildLog = program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(device);
-            lastError = "Build failed:\n" + buildLog;
-            return false;
-        }
-        
-        // Create kernels
-        for (const auto& info : kernelInfos) {
-            cl::Kernel kernel(program, info.name.c_str(), &err);
-            if (err != CL_SUCCESS) {
-                lastError = "Failed to create kernel: " + info.name;
-                return false;
-            }
-            kernels[info.name] = kernel;
-        }
-        
-        // Store kernel info
-        for (const auto& info : kernelInfos) {
-            kernelInfos[info.name] = info;   // FIXED: use insert instead of operator[]
-        }
-        
-        return true;
-        
-    } catch (const cl::Error& e) {
-        lastError = "OpenCL error: " + std::string(e.what());
+    cl_int err;
+    
+    // Create program from binary
+    const unsigned char* binaryPtr = spirvBinary.data();
+    size_t binarySize = spirvBinary.size();
+    
+    cl_program programCL = clCreateProgramWithBinary(
+        context,
+        1,
+        &device,
+        &binarySize,
+        &binaryPtr,
+        nullptr,
+        &err
+    );
+    
+    if (err != CL_SUCCESS) {
+        lastError = "Failed to create program from SPIR-V: " + std::to_string(err);
         return false;
     }
+    
+    // Build program
+    err = clBuildProgram(programCL, 1, &device, nullptr, nullptr, nullptr);
+    if (err != CL_SUCCESS) {
+        size_t logSize;
+        clGetProgramBuildInfo(programCL, device, CL_PROGRAM_BUILD_LOG, 0, nullptr, &logSize);
+        std::vector<char> buildLog(logSize + 1);
+        clGetProgramBuildInfo(programCL, device, CL_PROGRAM_BUILD_LOG, logSize, buildLog.data(), nullptr);
+        lastError = "Build failed:\n" + std::string(buildLog.data());
+        clReleaseProgram(programCL);
+        return false;
+    }
+    
+    // Store program
+    program = programCL;
+    
+    // Create kernels
+    for (const auto& info : kernelInfos) {
+        cl_kernel kernelCL = clCreateKernel(programCL, info.name.c_str(), &err);
+        if (err != CL_SUCCESS) {
+            lastError = "Failed to create kernel: " + info.name;
+            clReleaseProgram(programCL);
+            return false;
+        }
+        kernels[info.name] = kernelCL;
+        kernelInfosMap[info.name] = info;
+    }
+    
+    return true;
 }
 
 bool OpenCLRuntime::loadSPIRVFromFile(const std::string& spirvFile,
@@ -159,26 +228,25 @@ bool OpenCLRuntime::runKernel(const std::string& kernelName,
         return false;
     }
     
-    try {
-        cl::NDRange global(globalSize);
-        cl::NDRange local(localSize);
-        
-        cl_int err = queue.enqueueNDRangeKernel(it->second, 
-                                                cl::NullRange, 
-                                                global, 
-                                                local);
-        if (err != CL_SUCCESS) {
-            lastError = "Failed to enqueue kernel: " + std::to_string(err);
-            return false;
-        }
-        
-        queue.finish();
-        return true;
-        
-    } catch (const cl::Error& e) {
-        lastError = "OpenCL error: " + std::string(e.what());
+    cl_int err = clEnqueueNDRangeKernel(
+        queue,
+        it->second,
+        1,
+        nullptr,
+        &globalSize,
+        &localSize,
+        0,
+        nullptr,
+        nullptr
+    );
+    
+    if (err != CL_SUCCESS) {
+        lastError = "Failed to enqueue kernel: " + std::to_string(err);
         return false;
     }
+    
+    clFinish(queue);
+    return true;
 }
 
 bool OpenCLRuntime::runKernel2D(const std::string& kernelName,
@@ -190,26 +258,28 @@ bool OpenCLRuntime::runKernel2D(const std::string& kernelName,
         return false;
     }
     
-    try {
-        cl::NDRange global(globalX, globalY);
-        cl::NDRange local(localX, localY);
-        
-        cl_int err = queue.enqueueNDRangeKernel(it->second,
-                                                cl::NullRange,
-                                                global,
-                                                local);
-        if (err != CL_SUCCESS) {
-            lastError = "Failed to enqueue 2D kernel: " + std::to_string(err);
-            return false;
-        }
-        
-        queue.finish();
-        return true;
-        
-    } catch (const cl::Error& e) {
-        lastError = "OpenCL error: " + std::string(e.what());
+    size_t global[2] = {globalX, globalY};
+    size_t local[2] = {localX, localY};
+    
+    cl_int err = clEnqueueNDRangeKernel(
+        queue,
+        it->second,
+        2,
+        nullptr,
+        global,
+        local,
+        0,
+        nullptr,
+        nullptr
+    );
+    
+    if (err != CL_SUCCESS) {
+        lastError = "Failed to enqueue 2D kernel: " + std::to_string(err);
         return false;
     }
+    
+    clFinish(queue);
+    return true;
 }
 
 bool OpenCLRuntime::runKernel3D(const std::string& kernelName,
@@ -221,85 +291,107 @@ bool OpenCLRuntime::runKernel3D(const std::string& kernelName,
         return false;
     }
     
-    try {
-        cl::NDRange global(globalX, globalY, globalZ);
-        cl::NDRange local(localX, localY, localZ);
-        
-        cl_int err = queue.enqueueNDRangeKernel(it->second,
-                                                cl::NullRange,
-                                                global,
-                                                local);
-        if (err != CL_SUCCESS) {
-            lastError = "Failed to enqueue 3D kernel: " + std::to_string(err);
-            return false;
-        }
-        
-        queue.finish();
-        return true;
-        
-    } catch (const cl::Error& e) {
-        lastError = "OpenCL error: " + std::string(e.what());
+    size_t global[3] = {globalX, globalY, globalZ};
+    size_t local[3] = {localX, localY, localZ};
+    
+    cl_int err = clEnqueueNDRangeKernel(
+        queue,
+        it->second,
+        3,
+        nullptr,
+        global,
+        local,
+        0,
+        nullptr,
+        nullptr
+    );
+    
+    if (err != CL_SUCCESS) {
+        lastError = "Failed to enqueue 3D kernel: " + std::to_string(err);
         return false;
     }
+    
+    clFinish(queue);
+    return true;
 }
 
 bool OpenCLRuntime::setKernelArgBuffer(const std::string& kernelName,
                                        int index,
-                                       const cl::Buffer& buffer) {
+                                       const cl_mem& buffer) {
     auto it = kernels.find(kernelName);
     if (it == kernels.end()) {
         lastError = "Kernel not found: " + kernelName;
         return false;
     }
     
-    it->second.setArg(index, buffer);
+    cl_int err = clSetKernelArg(it->second, index, sizeof(cl_mem), &buffer);
+    if (err != CL_SUCCESS) {
+        lastError = "Failed to set kernel arg buffer: " + std::to_string(err);
+        return false;
+    }
     return true;
 }
 
 std::string OpenCLRuntime::getDeviceName() const {
     if (!initialized) return "Not initialized";
-    return device.getInfo<CL_DEVICE_NAME>();
+    char name[256];
+    clGetDeviceInfo(device, CL_DEVICE_NAME, sizeof(name), name, nullptr);
+    return std::string(name);
 }
 
 std::string OpenCLRuntime::getDeviceVendor() const {
     if (!initialized) return "Not initialized";
-    return device.getInfo<CL_DEVICE_VENDOR>();
+    char vendor[256];
+    clGetDeviceInfo(device, CL_DEVICE_VENDOR, sizeof(vendor), vendor, nullptr);
+    return std::string(vendor);
 }
 
 size_t OpenCLRuntime::getMaxWorkGroupSize() const {
     if (!initialized) return 0;
-    return device.getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>();
+    size_t size;
+    clGetDeviceInfo(device, CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(size), &size, nullptr);
+    return size;
 }
 
 size_t OpenCLRuntime::getMaxComputeUnits() const {
     if (!initialized) return 0;
-    return device.getInfo<CL_DEVICE_MAX_COMPUTE_UNITS>();
+    cl_uint units;
+    clGetDeviceInfo(device, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(units), &units, nullptr);
+    return units;
 }
 
 size_t OpenCLRuntime::getGlobalMemorySize() const {
     if (!initialized) return 0;
-    return device.getInfo<CL_DEVICE_GLOBAL_MEM_SIZE>();
+    cl_ulong size;
+    clGetDeviceInfo(device, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(size), &size, nullptr);
+    return size;
 }
 
 size_t OpenCLRuntime::getLocalMemorySize() const {
     if (!initialized) return 0;
-    return device.getInfo<CL_DEVICE_LOCAL_MEM_SIZE>();
+    cl_ulong size;
+    clGetDeviceInfo(device, CL_DEVICE_LOCAL_MEM_SIZE, sizeof(size), &size, nullptr);
+    return size;
 }
 
 std::string OpenCLRuntime::getDeviceVersion() const {
     if (!initialized) return "Not initialized";
-    return device.getInfo<CL_DEVICE_VERSION>();
+    char version[256];
+    clGetDeviceInfo(device, CL_DEVICE_VERSION, sizeof(version), version, nullptr);
+    return std::string(version);
 }
 
 std::string OpenCLRuntime::getDriverVersion() const {
     if (!initialized) return "Not initialized";
-    return device.getInfo<CL_DRIVER_VERSION>();
+    char version[256];
+    clGetDeviceInfo(device, CL_DRIVER_VERSION, sizeof(version), version, nullptr);
+    return std::string(version);
 }
 
 const KernelInfo& OpenCLRuntime::getKernelInfo(const std::string& name) const {
     static KernelInfo empty;
-    auto it = kernelInfos.find(name);
-    if (it != kernelInfos.end()) {
+    auto it = kernelInfosMap.find(name);
+    if (it != kernelInfosMap.end()) {
         return it->second;
     }
     return empty;
