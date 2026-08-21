@@ -1,6 +1,6 @@
 // tools/krun.cpp - K-Lang Bundler: .k → .exe with SPIR-V + CL Runtime
 // Pushpita Catol Approved ✅
-// Simple approach: Just use -lOpenCL, let compiler find it!
+// FIXED: Uses ONLY local w64devkit g++ (no external dependencies!)
 
 #include <iostream>
 #include <fstream>
@@ -24,6 +24,57 @@
 
 // Global BinopPrecedence (from main.cpp)
 std::map<char, int> BinopPrecedence;
+
+// ====================================================================
+// FILE EXISTENCE HELPER
+// ====================================================================
+
+bool fileExists(const std::string& path) {
+    std::ifstream f(path.c_str());
+    return f.good();
+}
+
+// ====================================================================
+// COMPILER DETECTION - LOCAL W64DEVKIT ONLY!
+// ====================================================================
+
+std::string findLocalCompiler() {
+    std::cout << "🔍 Looking for local w64devkit compiler...\n";
+    
+    // Check all possible paths (from tools/ folder)
+    std::vector<std::string> paths = {
+        // From bin/tools/ to bin/toolchain/w64devkit/bin/
+        "../toolchain/w64devkit/bin/g++.exe",
+        "./toolchain/w64devkit/bin/g++.exe",
+        "../../toolchain/w64devkit/bin/g++.exe",
+        
+        // Absolute path (your exact location)
+        "C:/Users/hrish/Downloads/LLVM C++/bin/toolchain/w64devkit/bin/g++.exe",
+        
+        // Try with different casing
+        "../toolchain/w64devkit/bin/g++.exe",
+        "../toolchain/w64devkit/bin/g++",
+        
+        // Fallback to system PATH (last resort)
+        "g++.exe"
+    };
+    
+    for (const auto& p : paths) {
+        if (fileExists(p)) {
+            std::cout << "✅ Found local compiler: " << p << "\n";
+            return p;
+        }
+    }
+    
+    // If not found, show error and exit
+    std::cerr << "\n❌ ERROR: w64devkit g++ not found!\n";
+    std::cerr << "Expected at: ../toolchain/w64devkit/bin/g++.exe\n";
+    std::cerr << "Current directory: " << std::filesystem::current_path() << "\n";
+    std::cerr << "\nPlease make sure w64devkit is in:\n";
+    std::cerr << "  C:/Users/hrish/Downloads/LLVM C++/bin/toolchain/w64devkit/bin/\n";
+    exit(1);
+    return "";
+}
 
 // ====================================================================
 // SPIR-V GENERATOR - Auto-detects entry point!
@@ -105,167 +156,89 @@ public:
     SPIRVGenerator(const std::string& out) : outputName(out), kernelName("main") {}
 
     bool generate(const std::string& source, std::vector<unsigned char>& spirvBinary) {
-    std::cout << "🔧 Parsing and compiling K-Lang source...\n";
-    
-    // ===== DEBUG: Before InitializeModuleAndPassManager =====
-    std::cout << "DEBUG: About to call InitializeModuleAndPassManager()" << std::endl;
-    std::cout << "DEBUG: source size = " << source.size() << std::endl;
-    
-    // 1. Initialize LLVM
-    InitializeModuleAndPassManager();
-    
-    std::cout << "DEBUG: InitializeModuleAndPassManager done" << std::endl;
-    
-    // ===== DEBUG: Before setting target triple =====
-    std::cout << "DEBUG: About to set target triple" << std::endl;
-    
-    // 2. Set up SPIR-V target triple
-    TheModule->setTargetTriple(llvm::Triple("spirv-unknown-unknown"));
-    
-    std::cout << "DEBUG: Target triple set" << std::endl;
-    
-    // ===== DEBUG: Before std::cin redirection =====
-    std::cout << "DEBUG: About to redirect std::cin" << std::endl;
-    
-    // 3. Parse the source
-    std::istringstream inputStream(source);
-    auto oldCin = std::cin.rdbuf();
-    std::cin.rdbuf(inputStream.rdbuf());
-    
-    std::cout << "DEBUG: std::cin redirected" << std::endl;
-    
-    // ===== DEBUG: Before getNextToken =====
-    std::cout << "DEBUG: About to call getNextToken()" << std::endl;
-    
-    // Reset lexer state
-    CurTok = 0;
-    int firstToken = getNextToken();
-
-    std::cout << "DEBUG: getNextToken() returned: " << firstToken << std::endl;
-    std::cout << "DEBUG: CurTok = " << CurTok << std::endl;
-
-    // DEBUG: Print what token it is
-    if (CurTok == tok_def) {
-        std::cout << "DEBUG: CurTok is tok_def" << std::endl;
-    } else if (CurTok == tok_eof) {
-        std::cout << "DEBUG: CurTok is tok_eof" << std::endl;
-    } else if (CurTok == tok_identifier) {
-        std::cout << "DEBUG: CurTok is tok_identifier: " << IdentifierStr << std::endl;
-    } else if (CurTok == tok_extern) {
-        std::cout << "DEBUG: CurTok is tok_extern" << std::endl;
-    } else if (CurTok == tok_number) {
-        std::cout << "DEBUG: CurTok is tok_number: " << NumVal << std::endl;
-    } else if (CurTok > 0 && CurTok < 256) {
-        std::cout << "DEBUG: CurTok is character: " << (char)CurTok << std::endl;
-    } else {
-        std::cout << "DEBUG: CurTok is unknown token: " << CurTok << std::endl;
-    }
-
-    std::cout << "DEBUG: tok_eof = " << tok_eof << std::endl;
-    std::cout << "DEBUG: Starting parse loop....." << std::endl;
-    
-    std::cout << "DEBUG: getNextToken() returned: " << firstToken << std::endl;
-    std::cout << "DEBUG: tok_eof = " << tok_eof << std::endl;
-    std::cout << "DEBUG: Starting parse loop....." << std::endl;
-    
-    // 4. Parse and generate code
-    int safety = 0;
-    while (CurTok != tok_eof && safety < 1000) {
-        safety++;
-        std::cout << "DEBUG: safety=" << safety << ", CurTok=" << CurTok << std::endl;
+        std::cout << "🔧 Parsing and compiling K-Lang source...\n";
         
-        switch (CurTok) {
-        case ';': 
-            std::cout << "DEBUG: Found ';' token" << std::endl;
-            getNextToken(); 
-            break;
-        case tok_def:
-            std::cout << "DEBUG: Found tok_def" << std::endl;
-            HandleDefinition();
-            break;
-        case tok_extern:
-            std::cout << "DEBUG: Found tok_extern" << std::endl;
-            HandleExtern();
-            break;
-        default:
-            std::cout << "DEBUG: Found default token: " << CurTok << std::endl;
-            HandleTopLevelExpression();
-            break;
+        // 1. Initialize LLVM
+        InitializeModuleAndPassManager();
+        
+        // 2. Set up SPIR-V target triple
+        TheModule->setTargetTriple(llvm::Triple("spirv-unknown-unknown"));
+        
+        // 3. Parse the source
+        std::istringstream inputStream(source);
+        auto oldCin = std::cin.rdbuf();
+        std::cin.rdbuf(inputStream.rdbuf());
+        
+        // Reset lexer state
+        CurTok = 0;
+        getNextToken();
+        
+        // 4. Parse and generate code
+        while (CurTok != tok_eof) {
+            switch (CurTok) {
+            case ';': 
+                getNextToken(); 
+                break;
+            case tok_def:
+                HandleDefinition();
+                break;
+            case tok_extern:
+                HandleExtern();
+                break;
+            default:
+                HandleTopLevelExpression();
+                break;
+            }
         }
+        
+        // Restore stdin
+        std::cin.rdbuf(oldCin);
+        
+        // 5. Auto-detect entry point
+        kernelName = detectEntryPoint();
+        
+        std::cout << "🎯 Entry point selected: " << kernelName << "\n";
+        std::cout << "🔧 Generating SPIR-V binary...\n";
+        
+        // 6. Generate SPIR-V
+        std::string spirvFile = outputName + ".spv";
+        EmitObjectFile(spirvFile, false, "", "spirv-unknown-unknown");
+        
+        // 7. Read the generated SPIR-V file
+        std::ifstream file(spirvFile, std::ios::binary);
+        if (!file) {
+            std::cerr << "❌ Failed to read SPIR-V file: " << spirvFile << "\n";
+            return false;
+        }
+        
+        file.seekg(0, std::ios::end);
+        size_t size = file.tellg();
+        file.seekg(0, std::ios::beg);
+        spirvBinary.resize(size);
+        file.read(reinterpret_cast<char*>(spirvBinary.data()), size);
+        file.close();
+        
+        // 8. Clean up
+        std::remove(spirvFile.c_str());
+        std::string llFile = outputName + ".ll";
+        std::remove(llFile.c_str());
+        
+        std::cout << "✅ SPIR-V generated (" << spirvBinary.size() << " bytes)\n";
+        return true;
     }
-    
-    if (safety >= 1000) {
-        std::cout << "⚠️ Safety limit reached! Possible infinite loop." << std::endl;
-        std::cout << "   Final CurTok = " << CurTok << std::endl;
-    }
-    
-    std::cout << "DEBUG: Parse loop finished. CurTok = " << CurTok << std::endl;
-    
-    // Restore stdin
-    std::cin.rdbuf(oldCin);
-    std::cout << "DEBUG: std::cin restored" << std::endl;
-    
-    // 5. Auto-detect entry point
-    std::cout << "DEBUG: About to detect entry point" << std::endl;
-    kernelName = detectEntryPoint();
-    std::cout << "DEBUG: Entry point detected: " << kernelName << std::endl;
-    
-    std::cout << "🎯 Entry point selected: " << kernelName << "\n";
-    std::cout << "🔧 Generating SPIR-V binary...\n";
-    
-    // 6. Generate SPIR-V
-    std::string spirvFile = outputName + ".spv";
-    std::cout << "DEBUG: About to call EmitObjectFile()" << std::endl;
-    EmitObjectFile(spirvFile, false, "", "spirv-unknown-unknown");
-    std::cout << "DEBUG: EmitObjectFile() done" << std::endl;
-    
-    // 7. Read the generated SPIR-V file
-    std::ifstream file(spirvFile, std::ios::binary);
-    if (!file) {
-        std::cerr << "❌ Failed to read SPIR-V file: " << spirvFile << "\n";
-        return false;
-    }
-    
-    file.seekg(0, std::ios::end);
-    size_t size = file.tellg();
-    file.seekg(0, std::ios::beg);
-    spirvBinary.resize(size);
-    file.read(reinterpret_cast<char*>(spirvBinary.data()), size);
-    file.close();
-    
-    // 8. Clean up
-    std::remove(spirvFile.c_str());
-    std::string llFile = outputName + ".ll";
-    std::remove(llFile.c_str());
-    
-    std::cout << "✅ SPIR-V generated (" << spirvBinary.size() << " bytes)\n";
-    return true;
-}
     
     const std::string& getKernelName() const { return kernelName; }
 };
 
 // ====================================================================
-// BUNDLER - Simple! Just use -lOpenCL
+// BUNDLER - Uses ONLY local w64devkit + local OpenCL
 // ====================================================================
 
 class Bundler {
 private:
-    // Find compiler (g++ or clang++)
+    // Find compiler - ONLY local w64devkit!
     static std::string findCompiler() {
-        // Check if clang++ is available (preferred)
-        if (system("clang++ --version > nul 2>&1") == 0 ||
-            system("clang++ --version > /dev/null 2>&1") == 0) {
-            return "clang++";
-        }
-        
-        // Check if g++ is available
-        if (system("g++ --version > nul 2>&1") == 0 ||
-            system("g++ --version > /dev/null 2>&1") == 0) {
-            return "g++";
-        }
-        
-        return "g++"; // fallback
+        return findLocalCompiler();  // Uses the function above
     }
     
 public:
@@ -285,73 +258,47 @@ public:
         
         std::string compiler = findCompiler();
         
-        // Just use -lOpenCL and let the compiler/linker find it!
-        std::string cmd = compiler +
-              " -std=c++17 -O2 -Wall " +
-              cppFile +
-              " -lOpenCL" +
-              " -o " + outputName + ".exe";
+        // ============================================================
+        // BUILD COMMAND - USING ONLY LOCAL W64DEVKIT + LOCAL OPENCL
+        // ============================================================
+        std::string cmd = compiler + 
+            " -std=c++17 -O2 -Wall " +
+            cppFile +
+            " -I. -I../include" +
+            " -L." +
+            " libOpenCL.dll.a" +
+            " -lz -lzstd -lole32 -lshell32 -lntdll -lruntimeobject -loleaut32 -luuid" +
+            " -static-libgcc -static-libstdc++" +
+            " -o " + outputName + ".exe";
         
-        std::cout << "🔧 Compiling with: " << compiler << " -lOpenCL\n";
-        std::cout << "   (Using system's default OpenCL library path)\n";
+        std::cout << "🔧 Compiling with: " << compiler << "\n";
+        std::cout << "   Using local OpenCL files (libOpenCL.dll.a, OpenCL.dll)\n";
+        std::cout << "📝 Command: " << cmd << "\n\n";
+        
         int result = std::system(cmd.c_str());
         
-        // If that fails, try adding common include paths
+        // If that fails, try with LLVM paths (if needed)
         if (result != 0) {
-            std::cout << "\n⚠️  Compilation failed with default paths.\n";
-            std::cout << "   Trying with common OpenCL include paths...\n";
+            std::cout << "\n⚠️  First compilation attempt failed.\n";
+            std::cout << "   Trying with LLVM support...\n";
             
-            // Try common paths for OpenCL headers
-            std::vector<std::string> includePaths = {
-                "-I/usr/include",
-                "-I/usr/local/include",
-                "-I/mingw64/include",
-                "-I/mingw/include",
-                "-I/opt/rocm/include",
-                "-I/usr/local/cuda/include"
-            };
-            
-            bool found = false;
-            for (const auto& incPath : includePaths) {
-                std::string testCmd = compiler + " " + incPath + " -E - < /dev/null > nul 2>&1";
-                if (system(testCmd.c_str()) == 0) {
-                    cmd = compiler +
-                          " -std=c++17 -O2 -Wall " +
-                          cppFile +
-                          " " + incPath +
-                          " -lOpenCL" +
-                          " -o " + outputName + ".exe";
-                    std::cout << "🔧 Retrying with: " << incPath << "\n";
-                    result = std::system(cmd.c_str());
-                    if (result == 0) {
-                        found = true;
-                        break;
-                    }
-                }
-            }
-            
-            // If still failing, try Windows-specific paths
-            if (!found && result != 0) {
-                std::vector<std::string> winPaths = {
-                    "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.0/include",
-                    "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/include",
-                    "C:/Program Files (x86)/AMD APP SDK/include",
-                    "C:/Program Files/AMD APP SDK/include"
-                };
+            // Try with MSYS2 LLVM paths (if available)
+            if (fileExists("C:/msys64/clang64/include")) {
+                cmd = compiler +
+                      " -std=c++17 -O2 -Wall " +
+                      cppFile +
+                      " -I. -I../include" +
+                      " -I\"C:/msys64/clang64/include\"" +
+                      " -L." +
+                      " -L\"C:/msys64/clang64/lib\"" +
+                      " libOpenCL.dll.a" +
+                      " -lLLVM" +
+                      " -lz -lzstd -lole32 -lshell32 -lntdll -lruntimeobject -loleaut32 -luuid" +
+                      " -static-libgcc -static-libstdc++" +
+                      " -o " + outputName + ".exe";
                 
-                for (const auto& path : winPaths) {
-                    if (std::ifstream((path + "/CL/cl.h").c_str())) {
-                        cmd = compiler +
-                              " -std=c++17 -O2 -Wall " +
-                              cppFile +
-                              " -I\"" + path + "\"" +
-                              " -lOpenCL" +
-                              " -o " + outputName + ".exe";
-                        std::cout << "🔧 Retrying with: " << path << "\n";
-                        result = std::system(cmd.c_str());
-                        if (result == 0) break;
-                    }
-                }
+                std::cout << "📝 Command: " << cmd << "\n\n";
+                result = std::system(cmd.c_str());
             }
         }
         
@@ -359,13 +306,10 @@ public:
         
         if (result != 0) {
             std::cerr << "\n❌ Compilation failed.\n";
-            std::cerr << "\n📦 To fix this, install OpenCL:\n";
-            std::cerr << "   MSYS2:   pacman -S mingw-w64-x86_64-opencl-headers\n";
-            std::cerr << "   Linux:   sudo apt-get install opencl-headers ocl-icd-opencl-dev\n";
-            std::cerr << "   macOS:   brew install opencl\n";
-            std::cerr << "\n   Or install OpenCL SDK:\n";
-            std::cerr << "   NVIDIA:  https://developer.nvidia.com/cuda-downloads\n";
-            std::cerr << "   AMD:     https://www.amd.com/en/developer/opencl.html\n";
+            std::cerr << "\n📦 Make sure OpenCL is available:\n";
+            std::cerr << "   Place libOpenCL.dll.a in the current directory\n";
+            std::cerr << "   Or install OpenCL via MSYS2:\n";
+            std::cerr << "   pacman -S mingw-w64-clang-x86_64-opencl-headers\n";
             return false;
         }
         
@@ -621,14 +565,14 @@ int main(int argc, char** argv) {
         std::cout << "  -o <name>     Output executable name (default: 'a')\n\n";
         std::cout << "Auto-Detection:\n";
         std::cout << "  ✅ Auto-detects entry point (any function name)\n";
-        std::cout << "  ✅ Uses -lOpenCL (let compiler find it)\n\n";
+        std::cout << "  ✅ Uses local OpenCL files (libOpenCL.dll.a, OpenCL.dll)\n";
+        std::cout << "  ✅ Uses local w64devkit compiler ONLY!\n\n";
         std::cout << "Examples:\n";
         std::cout << "  " << argv[0] << " myprogram.k -o myprogram\n";
         std::cout << "  ./myprogram.exe 42\n\n";
-        std::cout << "Required:\n";
-        std::cout << "  Install OpenCL headers:\n";
-        std::cout << "  MSYS2: pacman -S mingw-w64-x86_64-opencl-headers\n";
-        std::cout << "  Linux: sudo apt-get install opencl-headers\n\n";
+        std::cout << "Required files in current directory:\n";
+        std::cout << "  libOpenCL.dll.a  (OpenCL import library)\n";
+        std::cout << "  OpenCL.dll       (OpenCL runtime)\n\n";
         return 1;
     }
     
